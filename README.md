@@ -25,7 +25,7 @@ Opens `http://localhost:8000` automatically. Everything is built into the UI:
 ```
 python3 gr.py exhaustknight                  # your latest chess.com game
 python3 gr.py exhaustknight 173871734098     # a specific game (id is in the game URL)
-python3 gr.py game.pgn                       # any PGN file
+python3 gr.py tests/game2.pgn                # any PGN file
 ```
 (`chmod +x gr.py` once if you'd rather type `./gr.py`.)
 
@@ -65,12 +65,16 @@ Calibrated against two reviewed games: labels agree ~80% of the time, game accur
 The rest is engine-depth noise on near-equal moves.
 
 To improve it: get a game chess.com has reviewed, save its labels one-per-ply space-separated to
-`labels.txt`, then `python3 calibrate.py ui/out.json labels.txt`. It prints a confusion matrix and the
-win%-loss range per label. Tune `THRESHOLDS` / `ACC_K` at the top of review.py.
+`labels.txt`, then `python3 tests/calibrate.py ui/out.json labels.txt` (or compare calibration sets: `python3 tests/calibrate.py tests/real_out.json tests/chesscom_labels.txt`). It prints a confusion matrix and the win%-loss range per label. Tune `THRESHOLDS` / `ACC_K` at the top of review.py.
 
-## Files
-`gr.py` launcher + analysis server · `review.py` engine + classification · `ui/` the interface ·
-`openings/` Lichess opening book · `calibrate.py` threshold tuning
+## Repository Structure
+- `gr.py` — launcher and local analysis server
+- `review.py` — Stockfish engine analysis, move classification, and Chess.com API integration
+- `ui/` — interactive web interface (`index.html`, `assets/`, `out.json`)
+- `openings/` — Lichess opening book ECO TSVs
+- `tests/` — sample games (`*.pgn`), calibration label datasets (`*.txt`, `*.json`), and `calibrate.py`
+- `tools/` — developer and scraping utilities (`tools/harvest/`)
+- `docs/` — reference screenshots (`docs/screenshots/`)
 
 The server also exposes `/api/legal`, `/api/move` and `/api/analyze` on localhost, which is what
 makes free play work. Re-open the last analysed game without re-running the engine:

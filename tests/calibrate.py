@@ -2,7 +2,7 @@
 """
 Calibrate classification thresholds against chess.com.
 
-  python calibrate.py real_out.json chesscom_labels.txt
+  python tests/calibrate.py tests/real_out.json tests/chesscom_labels.txt
 
 chesscom_labels.txt: one label per ply, in order, as chess.com shows them, e.g.
   Book Book Best Excellent Inaccuracy Best Blunder Great ...
@@ -36,7 +36,7 @@ def main(json_path, labels_path):
     cols = [c for c in ORDER if any(conf[(r, c)] for r in ORDER)]
     print(f"{'':<11}" + "".join(f"{c[:5]:>6}" for c in cols))
     for r in ORDER:
-        if any(conf[(r, c)] for c in ORDER):
+        if any(conf[(r, c)] for r in ORDER):
             print(f"{r:<11}" + "".join(f"{conf[(r,c)] or '':>6}" for c in cols))
 
     print("\nwin% loss range per chess.com label (min / median / max) — set THRESHOLDS between adjacent ranges")
