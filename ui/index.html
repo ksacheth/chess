@@ -5,8 +5,6 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Game Review</title>
 <style>
-@font-face{font-family:"ChessSans";src:url(assets/ChessSans-Bold.19a3983f.woff2) format("woff2");font-weight:700}
-@font-face{font-family:"ChessSans";src:url(assets/ChessSans-ExtraBold.3b60f736.woff2) format("woff2");font-weight:800}
 /* ===== tokens (values harvested from chess.com computed styles) ===== */
 :root{
   --gray-900:#262421;--gray-800:#312E2B;--gray-700:#4B4847;--gray-600:#666564;--gray-500:#8B8987;--gray-400:#BEBDB9;--gray-100:#F1F1F1;
@@ -18,7 +16,7 @@
   --sq-brilliant:rgba(27,172,166,.8);--sq-great:rgba(116,155,191,.8);--sq-best:rgba(151,189,77,.8);--sq-excellent:rgba(151,189,77,.8);--sq-good:rgba(149,183,118,.8);
   --sq-book:rgba(213,164,125,.8);--sq-forced:rgba(151,189,77,.8);--sq-inaccuracy:rgba(247,192,69,.8);--sq-mistake:rgba(229,143,42,.8);--sq-miss:rgba(255,119,105,.8);--sq-blunder:rgba(202,52,49,.8);
   --light:#EBECD0;--dark:#779556;
-  --font:"ChessSans",-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --sq:96px;--panel-w:402px;--anim-ms:180ms;--radius-5:5px;--radius-10:10px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -31,7 +29,7 @@ button:focus-visible{outline:2px solid var(--blue-300);outline-offset:2px}
 /* ---------- board column ---------- */
 .board-col{display:flex;flex-direction:column;width:calc(var(--sq)*8 + 36px)}
 .player{display:flex;align-items:center;gap:8px;height:48px;padding:4px 0 4px 36px}
-.player .avatar{width:40px;height:40px;border-radius:3px;background:var(--gray-700) url(assets/wp.png) center/28px no-repeat}
+.player .avatar{width:40px;height:40px;border-radius:3px;background:var(--gray-700) url(assets/wp.svg) center/28px no-repeat}
 .player .name{font-weight:700;color:#fff;font-size:13px}
 .player .rating{color:var(--white-50);font-weight:400;margin-left:4px}
 .player .clock{margin-left:auto;background:var(--white-8);color:var(--white-72);font-weight:700;font-size:22px;padding:4px 14px;border-radius:3px;min-width:132px;text-align:right}
@@ -800,7 +798,7 @@ function animate(fromPly,toPly){
     if(isCap&&capPc){
       const capEl=document.createElement("div");
       capEl.className="fade-out";
-      capEl.style.backgroundImage=`url(assets/${capPc===capPc.toUpperCase()?"w":"b"}${PIECE[capPc.toUpperCase()]}.png)`;
+      capEl.style.backgroundImage=`url(assets/${capPc===capPc.toUpperCase()?"w":"b"}${PIECE[capPc.toUpperCase()]}.svg)`;
       capEl.style.transform=`translate(${dx*100}%,${dy*100}%) scale(1)`;
       capEl.style.opacity="1";
       $("anim").appendChild(capEl);
@@ -812,7 +810,7 @@ function animate(fromPly,toPly){
 
     const el=document.createElement("div");
     el.className="fly";
-    el.style.backgroundImage=`url(assets/${pc===pc.toUpperCase()?"w":"b"}${PIECE[pc.toUpperCase()]}.png)`;
+    el.style.backgroundImage=`url(assets/${pc===pc.toUpperCase()?"w":"b"}${PIECE[pc.toUpperCase()]}.svg)`;
     el.style.transform=`translate(${sx*100}%,${sy*100}%)`;
     $("anim").appendChild(el);
     void el.offsetHeight;
@@ -904,7 +902,7 @@ function render(){
     }
     if(sel===name)d.classList.add("sel"),d.insertAdjacentHTML("afterbegin",`<div class="hl"></div>`);
     if(sel&&legal&&(legal[sel]||[]).includes(name))d.insertAdjacentHTML("beforeend",`<div class="dot${g[r][f]?" cap":""}"></div>`);
-    if(p&&!activeAnimSkips.has(name))d.insertAdjacentHTML("beforeend",`<div class="piece" style="background-image:url(assets/${p===p.toUpperCase()?"w":"b"}${PIECE[p.toUpperCase()]}.png)"></div>`);
+    if(p&&!activeAnimSkips.has(name))d.insertAdjacentHTML("beforeend",`<div class="piece" style="background-image:url(assets/${p===p.toUpperCase()?"w":"b"}${PIECE[p.toUpperCase()]}.svg)"></div>`);
     if(ff===0)d.insertAdjacentHTML("beforeend",`<span class="coord rank">${8-r}</span>`);
     if(rr===7)d.insertAdjacentHTML("beforeend",`<span class="coord file">${"abcdefgh"[f]}</span>`);
     if(isTo&&activeMove&&activeMove.classification)d.insertAdjacentHTML("beforeend",badge(activeMove.classification));
@@ -930,7 +928,7 @@ function render(){
   $("ev-top").textContent=flipped?whiteTxt:blackTxt;$("ev-bot").textContent=flipped?blackTxt:whiteTxt;
   $("ev-top").style.color=flipped?"#403D39":"#fff";$("ev-bot").style.color=flipped?"#fff":"#403D39";
   const S=data.summary;$("name-top").textContent=flipped?S.white:S.black;$("name-bot").textContent=flipped?S.black:S.white;
-  $("av-top").style.backgroundImage=`url(assets/${flipped?"wp":"bp"}.png)`;$("av-bot").style.backgroundImage=`url(assets/${flipped?"bp":"wp"}.png)`;
+  $("av-top").style.backgroundImage=`url(assets/${flipped?"wp":"bp"}.svg)`;$("av-bot").style.backgroundImage=`url(assets/${flipped?"bp":"wp"}.svg)`;
   // list selection
   document.querySelectorAll(".node").forEach(e=>e.classList.toggle("sel",+e.dataset.ply===ply));
   const s=document.querySelector(".node.sel");if(s)s.scrollIntoView({block:"nearest"});
@@ -1012,10 +1010,17 @@ function drawArrows(cur,from,to){
     if(data&&data.moves&&data.moves.length&&data.moves[0].best_uci)
       els.push(arrow(...uciXY(data.moves[0].best_uci),"var(--c-best)"));
   } else {
-    // Best move arrow is always shown whenever best_uci is present
-    const bestUci=activeMove.best_uci||(variation?variation.best_uci:null);
-    if(bestUci)
-      els.push(arrow(...uciXY(bestUci),"var(--c-best)"));
+    // In analysis / variation mode, show best move arrow from current position
+    if(variation){
+      const bestUci=activeMove.best_uci||variation.best_uci;
+      if(bestUci)els.push(arrow(...uciXY(bestUci),"var(--c-best)"));
+    } else {
+      // In review mode: show best move arrow on Excellent and worse (suppressed on Best/Brilliant/Great/Book/Forced
+      // where it duplicates the played move, matching chess.com behavior)
+      const bestUci=activeMove.best_uci;
+      if(activeMove.classification&&NEEDS_BEST.has(activeMove.classification)&&bestUci&&bestUci!==activeMove.uci)
+        els.push(arrow(...uciXY(bestUci),"var(--c-best)"));
+    }
     // Threat arrow (red) on mistake, miss, blunder
     const threatUci=activeMove.threat_uci;
     if(activeMove.classification&&NEEDS_THREAT.has(activeMove.classification)&&threatUci)
@@ -1036,7 +1041,7 @@ function drawArc(){
 
 function node(m){
   const cls=m.classification,pc=/^[KQRBN]/.test(m.san)&&!/^O/.test(m.san)?m.san[0]:null,txt=pc?m.san.slice(1):m.san;
-  return`<span class="node ${cls.toLowerCase()}" data-ply="${m.ply}">${SHOW_ICON.has(cls)?ico(cls):""}${pc?`<span class="pc" style="background-image:url(assets/${m.color==="white"?"w":"b"}${PIECE[pc]}.png)"></span>`:""}${txt}</span>`;
+  return`<span class="node ${cls.toLowerCase()}" data-ply="${m.ply}">${SHOW_ICON.has(cls)?ico(cls):""}${pc?`<span class="pc" style="background-image:url(assets/${m.color==="white"?"w":"b"}${PIECE[pc]}.svg)"></span>`:""}${txt}</span>`;
 }
 
 function load(d){
@@ -1136,7 +1141,7 @@ async function playMove(from,to){
     if(capPc){
       const capEl=document.createElement("div");
       capEl.className="fade-out";
-      capEl.style.backgroundImage=`url(assets/${capPc===capPc.toUpperCase()?"w":"b"}${PIECE[capPc.toUpperCase()]}.png)`;
+      capEl.style.backgroundImage=`url(assets/${capPc===capPc.toUpperCase()?"w":"b"}${PIECE[capPc.toUpperCase()]}.svg)`;
       capEl.style.transform=`translate(${dx*100}%,${dy*100}%) scale(1)`;
       capEl.style.opacity="1";
       $("anim").appendChild(capEl);
@@ -1148,7 +1153,7 @@ async function playMove(from,to){
 
     const el=document.createElement("div");
     el.className="fly";
-    el.style.backgroundImage=`url(assets/${pc===pc.toUpperCase()?"w":"b"}${PIECE[pc.toUpperCase()]}.png)`;
+    el.style.backgroundImage=`url(assets/${pc===pc.toUpperCase()?"w":"b"}${PIECE[pc.toUpperCase()]}.svg)`;
     el.style.transform=`translate(${sx*100}%,${sy*100}%)`;
     $("anim").appendChild(el);
     void el.offsetHeight;

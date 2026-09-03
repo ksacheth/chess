@@ -15,7 +15,7 @@ While the page is open the same server also answers:
   POST /api/analyze {fen, time}      eval, best move, principal variation
 so you can play your own moves on the board and keep getting analysis.
 """
-import argparse, http.server, io, json, os, re, shutil, socketserver, subprocess, sys, threading, urllib.parse, webbrowser
+import argparse, atexit, http.server, io, json, os, re, shutil, socketserver, subprocess, sys, threading, urllib.parse, webbrowser
 import review
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,16 +34,36 @@ REVIEW_STATUS = {
 }
 
 class Engines:
-    """One reusable engine per thread, created lazily."""
-    def __init__(self, path): self.path, self.local = path, threading.local()
-    def get(self):
-        import chess.engine
-        e = getattr(self.local, "e", None)
-        if e is None:
-            e = chess.engine.SimpleEngine.popen_uci(self.path)
-            e.configure({"Threads": 2, "Hash": 128})
-            self.local.e = e
-        return e
+    """One shared engine protected by a lock to avoid leaking processes per request."""
+    def __init__(self, path):
+        self.path = path
+        self.lock = threading.Lock()
+        self.e = None
+
+    def _ensure(self):
+        if self.e is None:
+            import chess.engine
+            self.e = chess.engine.SimpleEngine.popen_uci(self.path)
+            threads = max(2, (os.cpu_count() or 4) - 1)
+            self.e.configure({"Threads": threads, "Hash": 256})
+        return self.e
+
+    def analyse(self, board, limit, **kw):
+        with self.lock:
+            return self._ensure().analyse(board, limit, **kw)
+
+    def classify(self, b_before, move, limit=None, prev_base=None):
+        with self.lock:
+            return review.classify_single_move(b_before, move, self._ensure(), limit=limit, prev_base=prev_base)
+
+    def close(self):
+        with self.lock:
+            if self.e is not None:
+                try:
+                    self.e.quit()
+                except Exception:
+                    pass
+                self.e = None
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw): super().__init__(*a, directory=UI, **kw)
@@ -97,7 +117,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "check": b.is_check(), "over": b.is_game_over()})
 
     def _classify(self, body):
-        import chess, chess.engine, review
+        import chess
         try:
             fen_before = body.get("fen_before")
             uci = body.get("uci")
@@ -112,13 +132,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             return self._send({"error": f"invalid input: {str(e)}"}, 400)
 
+        import chess.engine
         t = max(0.15, min(2.0, float(body.get("time", 0.35))))
         limit = chess.engine.Limit(time=t)
         prev_base = body.get("prev_base")
 
         try:
-            engine = POOL.get()
-            res = review.classify_single_move(b_before, m, engine, limit=limit, prev_base=prev_base)
+            res = POOL.classify(b_before, m, limit=limit, prev_base=prev_base)
             self._send(res)
         except Exception as e:
             self._send({"error": str(e)}, 500)
@@ -147,7 +167,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if b.is_game_over():
             return self._send({"cp": 0, "mate": None, "best_uci": None, "best_san": None, "over": True})
         t = max(.1, min(5.0, float(body.get("time", 0.6))))
-        try: info = POOL.get().analyse(b, chess.engine.Limit(time=t), multipv=1)
+        try: info = POOL.analyse(b, chess.engine.Limit(time=t), multipv=1)
         except Exception as e: return self._send({"error": str(e)}, 500)
         top = info[0] if isinstance(info, list) else info
         sc = top["score"].pov(chess.WHITE); pv = top.get("pv", [])
@@ -215,7 +235,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             engine_path = ENGINE_PATH or find_engine(None)
             res_data = review.review_game(
-                game, engine_path, depth=18, threads=2, movetime=movetime,
+                game, engine_path, threads=2, movetime=movetime,
                 progress_cb=on_progress, username=username
             )
 
@@ -276,15 +296,18 @@ def main():
 
     if not os.path.isdir(UI): sys.exit(f"missing {UI}")
     ENGINE_PATH = find_engine(a.engine); POOL = Engines(ENGINE_PATH)
+    atexit.register(lambda: POOL.close() if POOL else None)
     out = os.path.join(UI, "out.json")
     if a.target and not a.skip_analysis: run_review(ENGINE_PATH, a.target, a.game_id, a.time, out)
 
-    with Server(("", a.port), Handler) as httpd:
+    with Server(("127.0.0.1", a.port), Handler) as httpd:
         url = f"http://localhost:{a.port}"
         print(f"\nReview ready → {url}    (ctrl-C to stop)")
         if not a.no_open: threading.Timer(0.6, lambda: webbrowser.open(url)).start()
         try: httpd.serve_forever()
         except KeyboardInterrupt: print("\nstopped")
+        finally:
+            if POOL: POOL.close()
 
 if __name__ == "__main__":
     main()

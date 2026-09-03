@@ -36,7 +36,7 @@ Board with move highlights and classification badges, arrows, animated moves, so
 game arc, move list, per-move coach text, accuracy per side, and the counts table.
 
 **Arrows.** Two, following chess.com's scheme:
-- **green** — the engine's best move. Always shown by default on every move (not only on mistakes or when pressing the button).
+- **green** — the engine's best move. Shown on Excellent, Good, Inaccuracy, Mistake, Miss, and Blunder (suppressed on Best/Brilliant/Great/Book/Forced where it duplicates the played move, and shown from the current position in free-play analysis mode).
 - **red** — the threat you have just handed the opponent: their strongest reply in the position
   *after* your move. Appears on Mistake, Miss and Blunder only.
 
@@ -54,8 +54,8 @@ like. The board switches to Analysis mode: the engine evaluates each new positio
 best-move arrow follow your line, and the line is listed at the top. **Back to game** returns you to
 the move you left. This needs the server running, which it is whenever the page is open.
 
-**Sound** uses authentic chess.com sound effects: self vs. opponent moves, capture, check, castle, promotion,
-game end, the signature "Brilliant" (!!) sparkle chime, and the illegal move buzz. Instant 0ms playback
+**Sound** uses clean open-source sound effects (standard Lichess sound set): move, capture, check, castle, promotion,
+game end, victory, brilliant fanfare, and illegal move buzz. Instant 0ms playback
 via Web Audio API and preloaded audio buffers. Toggle with the speaker in the bottom-right.
 
 Classifications: Brilliant, Great, Best, Excellent, Good, Book, Forced, Inaccuracy, Mistake, Miss, Blunder.
@@ -80,4 +80,4 @@ The server also exposes `/api/legal`, `/api/move` and `/api/analyze` on localhos
 makes free play work. Re-open the last analysed game without re-running the engine:
 `python3 gr.py --skip-analysis`.
 
-For personal use. Piece images and fonts in ui/assets are chess.com's.
+Clean and publishable: piece vectors use Colin M. Burnett's standard chess pieces (CC BY-SA 3.0), sounds use the open-source Lichess sound set, and typography uses crisp system fonts.

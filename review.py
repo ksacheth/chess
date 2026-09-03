@@ -119,10 +119,10 @@ def hangs_piece(board_after, mover):
     return best
 
 # ---------- analysis ----------
-def analyse_game(game, engine_path, depth, multipv=2, threads=2, book=None, movetime=None, progress_cb=None):
+def analyse_game(game, engine_path, depth=18, multipv=2, threads=2, book=None, movetime=None, progress_cb=None):
     engine = chess.engine.SimpleEngine.popen_uci(engine_path)
     engine.configure({"Threads": threads, "Hash": 256})
-    limit = chess.engine.Limit(time=movetime) if movetime else chess.engine.Limit(depth=depth)
+    limit = chess.engine.Limit(time=movetime) if movetime is not None else chess.engine.Limit(depth=depth or 18)
     moves = list(game.mainline_moves())
     positions = []; b = game.board()
     total = len(moves) + 1
@@ -280,7 +280,7 @@ def list_chesscom_games(user, limit=15):
                 return out
     return out
 
-def review_game(game, engine_path, depth=18, threads=2, movetime=1.0, progress_cb=None, username=None):
+def review_game(game, engine_path, depth=None, threads=2, movetime=1.0, progress_cb=None, username=None):
     book = load_book()
     res = analyse_game(game, engine_path, depth=depth, threads=threads, book=book, movetime=movetime, progress_cb=progress_cb)
     wps = [win_pct(r["eval_after_cp"]) for r in res]
@@ -293,7 +293,7 @@ def review_game(game, engine_path, depth=18, threads=2, movetime=1.0, progress_c
         "white": white,
         "black": black,
         "result": game.headers.get("Result", "*"),
-        "depth": depth if not movetime else f"{movetime}s/move",
+        "depth": f"{movetime}s/move" if movetime is not None else f"depth {depth or 18}",
         "accuracy": {c: game_accuracy(res, c, wps) for c in ("white", "black")},
         "counts": {"white": {}, "black": {}},
         "flipped": flipped
@@ -316,7 +316,7 @@ def fetch_chesscom(user, game_id=None):
         for g in reversed(resp.json().get("games", [])):
             if game_id is None or str(game_id) in g.get("url", ""):
                 return g["pgn"]
-    raise ValueError(f"Game '{game_id or "latest"}' not found for user '{user}'.")
+    raise ValueError(f"Game '{game_id or 'latest'}' not found for user '{user}'.")
 
 def classify_single_move(board_before: chess.Board, move: chess.Move, engine: chess.engine.SimpleEngine, limit=None, book=None, prev_base=None):
     if limit is None:
@@ -453,7 +453,7 @@ def main():
     res = analyse_game(game, a.engine, a.depth, threads=a.threads, book=load_book(), movetime=a.time)
     wps = [win_pct(r["eval_after_cp"]) for r in res]
     summary = {"white": game.headers.get("White"), "black": game.headers.get("Black"), "result": game.headers.get("Result"),
-               "depth": a.depth if not a.time else f"{a.time}s/move", "accuracy": {c: game_accuracy(res, c, wps) for c in ("white", "black")},
+               "depth": f"{a.time}s/move" if a.time is not None else f"depth {a.depth}", "accuracy": {c: game_accuracy(res, c, wps) for c in ("white", "black")},
                "counts": {"white": {}, "black": {}}}
     for r in res:
         d = summary["counts"][r["color"]]; d[r["classification"]] = d.get(r["classification"], 0) + 1
