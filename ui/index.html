@@ -658,21 +658,15 @@ let data=null,ply=0,flipped=false,showBest=false,timer=null,animating=0;
 let variation=null;   // {fen, moves:[{san,uci,fen}], legal:{}, evalCp, mate, best_uci, best_san}
 let sel=null,legal=null,muted=false,dragEl=null,showArrows=true;
 
-/* ---------- sound (authentic chess.com audio + Web Audio API & HTML5 Audio pool) ---------- */
+/* ---------- sound (Lichess standard audio + Web Audio API pitch modulation & HTML5 pool) ---------- */
 const SOUND_MAP = {
-  moveSelf:      "assets/sounds/move-self.mp3",
-  moveOpponent:  "assets/sounds/move-opponent.mp3",
-  capture:       "assets/sounds/capture.mp3",
-  check:         "assets/sounds/move-check.mp3",
-  checkOpponent: "assets/sounds/move-opponent-check.mp3",
-  castle:        "assets/sounds/castle.mp3",
-  promote:       "assets/sounds/promote.mp3",
-  start:         "assets/sounds/game-start.mp3",
-  end:           "assets/sounds/game-end.mp3",
-  win:           "assets/sounds/game-win.mp3",
-  illegal:       "assets/sounds/illegal.mp3",
-  brilliant:     "assets/sounds/brilliant.mp3",
-  notify:        "assets/sounds/notify.mp3"
+  move:      "assets/sounds/move.mp3",
+  capture:   "assets/sounds/capture.mp3",
+  check:     "assets/sounds/check.mp3",
+  start:     "assets/sounds/start.mp3",
+  end:       "assets/sounds/end.mp3",
+  illegal:   "assets/sounds/illegal.mp3",
+  brilliant: "assets/sounds/brilliant.mp3"
 };
 
 let AC = null;
@@ -708,13 +702,14 @@ for (const [key, url] of Object.entries(SOUND_MAP)) {
     .catch(() => {});
 }
 
-function playSound(key, vol = 1.0) {
+function playSound(key, rate = 1.0, vol = 1.0) {
   if (muted) return;
   initAudio();
   if (AC && audioBuffers[key]) {
     try {
       const src = AC.createBufferSource();
       src.buffer = audioBuffers[key];
+      src.playbackRate.value = rate;
       const gain = AC.createGain();
       gain.gain.value = vol;
       src.connect(gain);
@@ -734,16 +729,16 @@ function playSound(key, vol = 1.0) {
 }
 
 const SFX = {
-  move: (isOpp = false) => playSound(isOpp ? "moveOpponent" : "moveSelf"),
+  move: (isOpp = false) => playSound("move", isOpp ? 0.94 : 1.05),
   capture: () => playSound("capture"),
-  check: (isOpp = false) => playSound(isOpp ? "checkOpponent" : "check"),
-  castle: () => playSound("castle"),
-  promote: () => playSound("promote"),
-  end: (win = false) => playSound(win ? "win" : "end"),
+  check: (isOpp = false) => playSound("check", isOpp ? 0.94 : 1.05),
+  castle: () => playSound("move", 0.88),
+  promote: () => playSound("move", 1.2),
+  end: (win = false) => playSound("end", win ? 1.08 : 0.92),
   illegal: () => playSound("illegal"),
   brilliant: () => playSound("brilliant"),
   start: () => playSound("start"),
-  notify: () => playSound("notify")
+  notify: () => playSound("end")
 };
 
 function sfxFor(m, color) {

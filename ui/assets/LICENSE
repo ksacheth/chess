@@ -1,0 +1,14 @@
+# Assets License & Attribution
+
+## Chess Pieces (SVG Vector Graphics)
+The chess piece vector graphics (`wp.svg`, `wn.svg`, `wb.svg`, `wr.svg`, `wq.svg`, `wk.svg`, `bp.svg`, `bn.svg`, `bb.svg`, `br.svg`, `bq.svg`, `bk.svg`) were created by **Colin M. Burnett** (`cburnett`) and are licensed under the **Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)** license.
+
+- **Author:** Colin M. Burnett
+- **Source:** [Wikimedia Commons: SVG chess pieces](https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces)
+- **License Terms:** [Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)](https://creativecommons.org/licenses/by-sa/3.0/)
+
+## Sound Effects (Audio MP3)
+The sound effects in `sounds/` (`move.mp3`, `capture.mp3`, `check.mp3`, `start.mp3`, `end.mp3`, `illegal.mp3`, `brilliant.mp3`) are from **Lichess** (`lila`), released under the **MIT License / CC0 Public Domain**.
+
+- **Source:** [Lichess Lila Standard Sounds](https://github.com/lichess-org/lila/tree/master/public/sound/standard)
+- **Project:** [lichess.org](https://lichess.org/)

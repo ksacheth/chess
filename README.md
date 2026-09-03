@@ -54,9 +54,7 @@ like. The board switches to Analysis mode: the engine evaluates each new positio
 best-move arrow follow your line, and the line is listed at the top. **Back to game** returns you to
 the move you left. This needs the server running, which it is whenever the page is open.
 
-**Sound** uses clean open-source sound effects (standard Lichess sound set): move, capture, check, castle, promotion,
-game end, victory, brilliant fanfare, and illegal move buzz. Instant 0ms playback
-via Web Audio API and preloaded audio buffers. Toggle with the speaker in the bottom-right.
+**Sound** uses a deduplicated open-source sound set (standard Lichess sounds): move, capture, check, game start, game end, illegal move, and brilliant fanfare. Web Audio API provides instant 0ms playback with subtle pitch modulation for player-vs-opponent moves, castling, and promotions. Toggle audio with the speaker in the bottom-right.
 
 Classifications: Brilliant, Great, Best, Excellent, Good, Book, Forced, Inaccuracy, Mistake, Miss, Blunder.
 
@@ -80,4 +78,8 @@ The server also exposes `/api/legal`, `/api/move` and `/api/analyze` on localhos
 makes free play work. Re-open the last analysed game without re-running the engine:
 `python3 gr.py --skip-analysis`.
 
-Clean and publishable: piece vectors use Colin M. Burnett's standard chess pieces (CC BY-SA 3.0), sounds use the open-source Lichess sound set, and typography uses crisp system fonts.
+## Licenses
+- **Code:** [MIT License](LICENSE)
+- **Chess Piece Vectors:** [Colin M. Burnett](https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces) ([CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/)) — see [ui/assets/LICENSE](ui/assets/LICENSE)
+- **Sound Effects:** [Lichess Lila Standard Sounds](https://github.com/lichess-org/lila/tree/master/public/sound/standard) (MIT / CC0)
+- **Openings Book:** [Lichess Chess Openings](https://github.com/lichess-org/chess-openings) (CC0)
