@@ -162,7 +162,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send({"error": f"invalid input: {str(e)}"}, 400)
 
         import chess.engine
-        t = _clamp_time(body.get("time", 0.35), 0.35, 0.15, 2.0)
+        t = _clamp_time(body.get("time", 0.8), 0.8, 0.15, 2.0)
         limit = chess.engine.Limit(time=t)
         prev_base = body.get("prev_base")
 
@@ -195,7 +195,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception: return self._send({"error": "bad fen"}, 400)
         if b.is_game_over():
             return self._send({"cp": 0, "mate": None, "best_uci": None, "best_san": None, "over": True})
-        t = _clamp_time(body.get("time", 0.6), 0.6, 0.1, MAX_MOVETIME)
+        t = _clamp_time(body.get("time", 0.8), 0.8, 0.1, MAX_MOVETIME)
         try: info = POOL.analyse(b, chess.engine.Limit(time=t), multipv=1)
         except Exception as e: return self._send({"error": str(e)}, 500)
         top = info[0] if isinstance(info, list) else info

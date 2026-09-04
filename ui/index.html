@@ -1224,7 +1224,8 @@ let anTok=0;
 async function refreshVariation(){
   await loadLegal();render();
   const fen=currentFen(),tok=++anTok;
-  const r=await api("/api/analyze",{fen,time:.6});
+  const reviewTime = (data && data.summary && parseFloat(data.summary.depth)) ? parseFloat(data.summary.depth) : 0.8;
+  const r=await api("/api/analyze",{fen,time:reviewTime});
   if(r&&!r.error&&variation&&tok===anTok&&currentFen()===fen){
     Object.assign(variation,{cp:r.cp,mate:r.mate,best_uci:r.best_uci,best_san:r.best_san});render();}
 }
@@ -1290,7 +1291,12 @@ async function playMove(from,to){
 
   // Trigger move analysis and classification
   const tok=++anTok;
-  api("/api/classify",{fen_before:prevFen,uci:r.uci}).then(c=>{
+  const reviewTime = (data && data.summary && parseFloat(data.summary.depth)) ? parseFloat(data.summary.depth) : 0.8;
+  const prevBase = (variation && variation.moves.length > 1)
+    ? variation.moves[variation.moves.length - 2].classification
+    : (data && data.moves && variation && variation.startPly > 0 ? data.moves[variation.startPly - 1].classification : null);
+
+  api("/api/classify",{fen_before:prevFen,uci:r.uci,time:reviewTime,prev_base:prevBase}).then(c=>{
     if(!c||c.error||!variation||tok!==anTok)return;
     moveObj.classification=c.classification;
     moveObj.accuracy=c.accuracy;

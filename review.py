@@ -463,7 +463,7 @@ def fetch_chesscom(user=None, game_id=None):
 
 def classify_single_move(board_before: chess.Board, move: chess.Move, engine: chess.engine.SimpleEngine, limit=None, book=None, prev_base=None):
     if limit is None:
-        limit = chess.engine.Limit(time=0.35)
+        limit = chess.engine.Limit(time=0.8)
     if book is None:
         try: book = load_book()
         except Exception: book = {}
