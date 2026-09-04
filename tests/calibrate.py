@@ -13,7 +13,7 @@ per chess.com label so you can see where their cutoffs actually sit.
 """
 import json, sys, collections
 
-ORDER = ["Brilliant","Great","Best","Excellent","Good","Book","Inaccuracy","Mistake","Miss","Blunder"]
+ORDER = ["Brilliant","Great","Best","Excellent","Good","Book","Forced","Inaccuracy","Mistake","Miss","Blunder"]
 
 def main(json_path, labels_path):
     d = json.load(open(json_path)); moves = d["moves"]
@@ -36,8 +36,26 @@ def main(json_path, labels_path):
     cols = [c for c in ORDER if any(conf[(r, c)] for r in ORDER)]
     print(f"{'':<11}" + "".join(f"{c[:5]:>6}" for c in cols))
     for r in ORDER:
-        if any(conf[(r, c)] for r in ORDER):
-            print(f"{r:<11}" + "".join(f"{conf[(r,c)] or '':>6}" for c in cols))
+        if any(conf[(r, x)] for x in cols):
+            print(f"{r:<11}" + "".join(f"{conf[(r, x)] or '':>6}" for x in cols))
+
+    # rank-distance: are disagreements near (adjacent ordinal rank) or far?
+    BASE = [c for c in ORDER if c not in ("Book", "Forced")]
+    def rank(c):
+        return BASE.index(c) if c in BASE else None
+    near = far = 0; far_examples = []
+    for i in range(n):
+        m, t = moves[i], theirs[i]
+        a, b = rank(m["classification"]), rank(t)
+        if a is None or b is None or a == b: continue
+        if abs(a - b) == 1: near += 1
+        else:
+            far += 1
+            if len(far_examples) < 10: far_examples.append((t, m["classification"], m["loss"]))
+    tot = near + far
+    if tot:
+        print(f"disagreements: {tot}  adjacent-rank {near} ({100*near//tot}%)  far {far} ({100*far//tot}%)")
+        if far_examples: print("far examples (cc, mine, loss):", far_examples)
 
     print("\nwin% loss range per chess.com label (min / median / max) — set THRESHOLDS between adjacent ranges")
     for lab in ORDER:
