@@ -277,14 +277,74 @@ def _game_id_of(url: str) -> str:
     return url.rstrip("/").rsplit("/", 1)[-1]
 
 def list_chesscom_games(user, limit=15):
-    import requests, datetime
-    h = {"User-Agent": "free-game-review/1.0"}
+    import requests, datetime, io
+    h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) free-game-review/1.0"}
     u = urllib.parse.quote(user, safe="")
     r = requests.get(f"https://api.chess.com/pub/player/{u}/games/archives", headers=h, timeout=10)
     if r.status_code != 200:
         return []
     archives = r.json().get("archives", [])
+    if not archives:
+        return []
+
     out = []
+    seen_ids = set()
+
+    # 1. Fetch real-time games from the monthly /pgn endpoint (bypasses Cloudflare edge cache)
+    latest_arch = archives[-1]
+    try:
+        r_pgn = requests.get(f"{latest_arch}/pgn", headers=h, timeout=10)
+        if r_pgn.status_code == 200 and r_pgn.text.strip():
+            import chess.pgn
+            s = io.StringIO(r_pgn.text)
+            while True:
+                g = chess.pgn.read_game(s)
+                if not g: break
+                link = g.headers.get("Link", "")
+                gid = link.rstrip("/").rsplit("/", 1)[-1] if link else ""
+                if not gid or gid in seen_ids: continue
+                seen_ids.add(gid)
+
+                w_user = g.headers.get("White", "")
+                b_user = g.headers.get("Black", "")
+                w_elo = g.headers.get("WhiteElo", "")
+                b_elo = g.headers.get("BlackElo", "")
+                res = g.headers.get("Result", "*")
+                tc = g.headers.get("TimeControl", "")
+                date_val = g.headers.get("Date", "")
+                time_val = g.headers.get("EndTime", "")
+
+                user_color = "white" if w_user.lower() == user.lower() else "black"
+                if res == "1-0":
+                    res_type = "win" if user_color == "white" else "loss"
+                elif res == "0-1":
+                    res_type = "win" if user_color == "black" else "loss"
+                else:
+                    res_type = "draw"
+
+                tc_base = int(tc.split("+")[0]) if (tc and tc.split("+")[0].isdigit()) else 300
+                if tc_base < 180: tc_class = "bullet"
+                elif tc_base < 600: tc_class = "blitz"
+                elif tc_base < 3600: tc_class = "rapid"
+                else: tc_class = "daily"
+
+                out.append({
+                    "id": gid,
+                    "url": link,
+                    "white": {"username": w_user, "rating": int(w_elo) if w_elo.isdigit() else None, "result": "win" if res == "1-0" else res},
+                    "black": {"username": b_user, "rating": int(b_elo) if b_elo.isdigit() else None, "result": "win" if res == "0-1" else res},
+                    "time_class": tc_class,
+                    "time_control": tc,
+                    "date": f"{date_val} {time_val}".strip(),
+                    "user_color": user_color,
+                    "result": res_type
+                })
+                if len(out) >= limit:
+                    return out
+    except Exception:
+        pass
+
+    # 2. Backfill with previous JSON archives if more games are requested
     for arch in reversed(archives[-2:]):
         resp = requests.get(arch, headers=h, timeout=10)
         if resp.status_code != 200: continue
@@ -292,6 +352,8 @@ def list_chesscom_games(user, limit=15):
         for g in reversed(games):
             url = g.get("url", "")
             gid = _game_id_of(url)
+            if not gid or gid in seen_ids: continue
+            seen_ids.add(gid)
             w = g.get("white", {})
             b = g.get("black", {})
             w_user = w.get("username", "")
@@ -339,21 +401,64 @@ def review_game(game, engine_path, depth=None, threads=2, movetime=1.0, progress
         d[r["classification"]] = d.get(r["classification"], 0) + 1
     return {"summary": summary, "moves": res}
 
-def fetch_chesscom(user, game_id=None):
-    import requests
-    h = {"User-Agent": "free-game-review/1.0"}
+def fetch_chesscom(user=None, game_id=None):
+    import requests, io
+    h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) free-game-review/1.0"}
+
+    # If only game_id is provided, look up players from the live callback endpoint
+    if game_id and not user:
+        try:
+            r_cb = requests.get(f"https://www.chess.com/callback/live/game/{game_id}", headers=h, timeout=6)
+            if r_cb.status_code == 200:
+                players = r_cb.json().get("players", {})
+                for pos in ["bottom", "top"]:
+                    cand = players.get(pos, {}).get("username")
+                    if cand:
+                        user = cand
+                        break
+        except Exception:
+            pass
+
+    if not user:
+        raise ValueError(f"Game '{game_id or 'latest'}' could not be resolved to a Chess.com player.")
+
     u = urllib.parse.quote(user, safe="")
     r = requests.get(f"https://api.chess.com/pub/player/{u}/games/archives", headers=h, timeout=10)
     if r.status_code != 200:
         raise ValueError(f"Chess.com player '{user}' not found.")
     archives = r.json().get("archives", [])
+    if not archives:
+        raise ValueError(f"No games found for player '{user}'.")
+
+    # Check the real-time /pgn endpoint for latest archives (bypasses Cloudflare edge cache)
+    for arch_url in reversed(archives[-3:]):
+        try:
+            r_pgn = requests.get(f"{arch_url}/pgn", headers=h, timeout=10)
+            if r_pgn.status_code == 200 and r_pgn.text.strip():
+                import chess.pgn
+                s = io.StringIO(r_pgn.text)
+                while True:
+                    g = chess.pgn.read_game(s)
+                    if not g: break
+                    link = g.headers.get("Link", "")
+                    curr_id = link.rstrip("/").rsplit("/", 1)[-1] if link else None
+                    if game_id is None: # Latest game requested
+                        exporter = chess.pgn.StringExporter(headers=True, variations=True, comments=True)
+                        return g.accept(exporter)
+                    if curr_id and curr_id == str(game_id).strip():
+                        exporter = chess.pgn.StringExporter(headers=True, variations=True, comments=True)
+                        return g.accept(exporter)
+        except Exception:
+            pass
+
+    # Fallback to JSON endpoint
     for url in reversed(archives[-3:]):
         resp = requests.get(url, headers=h, timeout=10)
         if resp.status_code != 200: continue
         for g in reversed(resp.json().get("games", [])):
-            # exact id match: substring matching made '1234' collide with '.../912345678'
             if game_id is None or _game_id_of(g.get("url", "")) == str(game_id).strip():
                 return g["pgn"]
+
     raise ValueError(f"Game '{game_id or 'latest'}' not found for user '{user}'.")
 
 def classify_single_move(board_before: chess.Board, move: chess.Move, engine: chess.engine.SimpleEngine, limit=None, book=None, prev_base=None):

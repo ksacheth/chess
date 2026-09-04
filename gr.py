@@ -255,9 +255,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         if pgn:
             pgn_text = pgn
-        elif username:
+        elif username or game_id:
             with REVIEW_LOCK:
-                REVIEW_STATUS["message"] = f"Fetching game from Chess.com for {username}..."
+                msg = f"Fetching game from Chess.com for {username}..." if username else f"Fetching game {game_id} from Chess.com..."
+                REVIEW_STATUS["message"] = msg
             pgn_text = review.fetch_chesscom(username, game_id)
         else:
             raise ValueError("Please provide a username, Game ID, Chess.com URL, or PGN.")

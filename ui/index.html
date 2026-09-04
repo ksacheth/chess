@@ -1342,10 +1342,11 @@ $m("btnReviewPgn").onclick = () => {
   const val = $m("inputPgn").value.trim();
   if (!val) { alert("Please paste a game link or PGN."); return; }
   const speed = parseFloat($m("selectSpeed").value) || 1.0;
-  if (/chess\.com/i.test(val)) {
-    startReview({ url: val, time: speed });
+  const user = $m("inputUsername").value.trim() || localStorage.getItem("chess_user") || undefined;
+  if (/^https?:\/\//i.test(val)) {
+    startReview({ url: val, username: user, time: speed });
   } else {
-    startReview({ pgn: val, time: speed });
+    startReview({ pgn: val, username: user, time: speed });
   }
 };
 
