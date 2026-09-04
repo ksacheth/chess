@@ -79,7 +79,12 @@ button:focus-visible{outline:2px solid var(--blue-300);outline-offset:2px}
 .varbar{display:none;align-items:center;gap:8px;padding:8px 12px;margin-bottom:8px;background:var(--white-8);border-radius:var(--radius-5);font-weight:600;color:var(--white-85);flex:none}
 .varbar.on{display:flex}
 .varbar .line{flex:1;color:var(--white-72);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.varbar button{background:var(--white-14);padding:4px 10px;border-radius:3px;font-size:12px;font-weight:600}
+.varbar button{background:var(--green-300);color:#fff;padding:5px 12px;border-radius:var(--radius-5);font-size:12px;font-weight:700;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;flex:none;transition:background .15s ease,transform .05s ease}
+.varbar button:hover{background:var(--green-400)}
+.varbar button:active{transform:scale(.97)}
+.varbar .vnode{display:inline-flex;align-items:center;margin-right:8px;cursor:pointer;padding:2px 6px;border-radius:3px;color:var(--white-72);transition:background .15s}
+.varbar .vnode:hover{background:var(--white-8);color:#fff}
+.varbar .vnode.sel{background:var(--white-14);color:#fff;font-weight:700}
 .coach .avatar{width:72px;height:72px;border-radius:50%;background:var(--gray-700);flex:none;display:flex;align-items:center;justify-content:center;font-size:34px}
 .bubble{position:relative;background:#fff;color:var(--gray-800);border-radius:var(--radius-10);padding:14px 16px;flex:1;min-height:97px;font-size:15px;line-height:1.35}
 .bubble:before{content:"";position:absolute;left:-8px;top:24px;border:8px solid transparent;border-right-color:#fff;border-left:0}
@@ -525,7 +530,7 @@ button:focus-visible{outline:2px solid var(--blue-300);outline-offset:2px}
       <button class="start" id="start">Start Review</button>
     </div>
     <div class="body" id="reviewView" hidden>
-      <div class="varbar" id="varbar"><span>Analysis</span><span class="line" id="varline"></span><button id="exitvar">Back to game</button></div>
+      <div class="varbar" id="varbar"><span style="color:var(--white-85);font-size:13px">Analysis</span><span class="line" id="varline"></span><button id="exitvar" title="Resume Game Review"><span>↻</span> Resume</button></div>
       <div class="coach"><div class="avatar" aria-hidden="true">&#9823;</div><div class="bubble" id="bubble"></div></div>
       <div class="flow">
         <button id="explain"><span>&#128161;</span>Explain</button>
@@ -754,8 +759,14 @@ function sfxFor(m, color) {
 /* ---------- server API ---------- */
 const api=(path,body)=>fetch(path,body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:undefined)
   .then(r=>r.json()).catch(()=>null);
-function currentFen(){ if(variation)return variation.fen;
-  const M=data.moves;return ply>=M.length?M[M.length-1].fen_after:M[ply].fen; }
+function currentFen(){
+  if(variation){
+    if(variation.index===0)return variation.startFen;
+    const m=variation.moves[variation.index-1];
+    return m?m.fen:(variation.startFen||"");
+  }
+  const M=data.moves;return ply>=M.length?M[M.length-1].fen_after:M[ply].fen;
+}
 async function loadLegal(){ const r=await api("/api/legal?fen="+encodeURIComponent(currentFen()));
   legal=r&&r.moves?r.moves:{}; }
 const v=c=>`var(--c-${c.toLowerCase()})`, sqv=c=>`var(--sq-${c.toLowerCase()})`;
@@ -874,13 +885,13 @@ function animate(fromPly,toPly){
 
 function render(){
   const M=data.moves,cur=variation?null:(ply?M[ply-1]:null);
-  const vlast=variation&&variation.moves.length?variation.moves[variation.moves.length-1]:null;
-  const activeMove=cur||vlast;
+  const vcur=variation&&(variation.index>0)?variation.moves[variation.index-1]:null;
+  const activeMove=cur||vcur;
   const fen=currentFen();
   const g=fenBoard(fen),bd=$("board");bd.querySelectorAll(".sq").forEach(e=>e.remove());
   let from=null,to=null;
   if(activeMove){
-    const ref=cur||{fen:vlast.prevFen,classification:vlast.classification||"Best"};
+    const ref=cur||{fen:activeMove.prevFen,classification:activeMove.classification||"Best"};
     const b0=fenBoard(ref.fen),em=[],fi=[];
     for(let r=0;r<8;r++)for(let f=0;f<8;f++){if(b0[r][f]!==g[r][f]){if(g[r][f]===null)em.push([r,f]);else fi.push([r,f])}}
     to=fi.find(([r,f])=>"kK".includes(g[r][f]))||fi[0]||null;
@@ -910,11 +921,17 @@ function render(){
   // eval bar
   let cp,mt;
   if(variation){
-    if(vlast&&vlast.eval_after_cp!=null){cp=vlast.eval_after_cp;mt=vlast.mate_after}
+    if(vcur&&vcur.eval_after_cp!=null){cp=vcur.eval_after_cp;mt=vcur.mate_after}
+    else if(variation.index===0){
+      const baseMove=variation.startPly?M[variation.startPly-1]:null;
+      cp=baseMove?baseMove.eval_after_cp:(M[0]?M[0].eval_before_cp:0);
+      mt=baseMove?baseMove.mate_after:null;
+    }
     else{cp=variation.cp==null?0:variation.cp;mt=variation.mate}
   } else {
-    cp=cur?cur.eval_after_cp:M[0].eval_before_cp;mt=cur?cur.mate_after:null;
+    cp=cur?cur.eval_after_cp:(M[0]?M[0].eval_before_cp:0);mt=cur?cur.mate_after:null;
   }
+  if(cp==null)cp=0;
   let txt=(mt!=null||Math.abs(cp)>=9000)?`M${Math.abs(mt||1)}`:(Math.abs(cp)/100).toFixed(1);
   if(!variation&&cur&&cur.mate_delivered)txt=cur.color==="white"?"1-0":"0-1";
   const wp=winPct(cp);
@@ -934,27 +951,43 @@ function render(){
     $("varline").innerHTML=mv.map((m,i)=>{
       const n=Math.floor((start+i)/2)+1;
       const num=((start+i)%2===0?n+". ":(i===0?n+"... ":""));
+      const isCurrent=(variation.index===i+1);
       const b=m.classification?`<span style="display:inline-block;padding:1px 5px;margin-left:3px;border-radius:3px;font-size:11px;font-weight:700;background:var(${CLS[m.classification]?.v||'--c-best'});color:#fff">${CLS[m.classification]?.s||''}</span>`:"";
-      return`<span style="display:inline-flex;align-items:center;margin-right:8px">${num}<b>${m.san}</b>${b}</span>`;
+      return`<span class="vnode${isCurrent?' sel':''}" data-vidx="${i+1}">${num}<b>${m.san}</b>${b}</span>`;
     }).join("");
+    const vs=$("varline").querySelector(".vnode.sel");
+    if(vs)vs.scrollIntoView({block:"nearest",inline:"nearest"});
+  }
+  // update nextbtn text & appearance
+  const nextBtn=$("nextbtn");
+  if(nextBtn){
+    if(variation){
+      nextBtn.innerHTML=`<span style="font-size:15px;line-height:1">↻</span>Resume`;
+      nextBtn.title="Resume Game Review";
+      nextBtn.setAttribute("aria-label","Resume Game Review");
+    } else {
+      nextBtn.innerHTML=`<span>→</span>Next`;
+      nextBtn.title="Next Move";
+      nextBtn.setAttribute("aria-label","Next Move");
+    }
   }
   // coach bubble
   const B=$("bubble");
   if(variation){
-    if(vlast&&vlast.classification){
-      const evs=vlast.mate_after?`M${Math.abs(vlast.mate_after)}`:`${vlast.eval_after_cp>=0?"+":"-"}${(Math.abs(vlast.eval_after_cp)/100).toFixed(2)}`;
+    if(vcur&&vcur.classification){
+      const evs=vcur.mate_after?`M${Math.abs(vcur.mate_after)}`:`${vcur.eval_after_cp>=0?"+":"-"}${(Math.abs(vcur.eval_after_cp)/100).toFixed(2)}`;
       let sub="";
-      if(vlast.classification==="Book")sub=vlast.note||"Book opening move.";
-      else if(vlast.classification==="Forced")sub="The only legal move.";
-      else if(["Best","Brilliant","Great"].includes(vlast.classification))
-        sub=vlast.classification==="Best"?`${vlast.san} was the best move.`:vlast.classification==="Brilliant"?`${vlast.san} sacrifices material and works!`:`${vlast.san} was the only good move here.`;
-      else sub=`${vlast.best_san?`<b>${vlast.best_san}</b> was best.`:`Best was ${vlast.best_san||"another move"}.`}${vlast.note?" "+vlast.note+".":""} Eval is now ${evs}.`;
-      B.innerHTML=`<div class="row">${ico(vlast.classification,20)}<span class="label">${vlast.classification}</span><span class="ev">${evs}</span></div><div class="sub">${sub}</div>`;
+      if(vcur.classification==="Book")sub=vcur.note||"Book opening move.";
+      else if(vcur.classification==="Forced")sub="The only legal move.";
+      else if(["Best","Brilliant","Great"].includes(vcur.classification))
+        sub=vcur.classification==="Best"?`${vcur.san} was the best move.`:vcur.classification==="Brilliant"?`${vcur.san} sacrifices material and works!`:`${vcur.san} was the only good move here.`;
+      else sub=`${vcur.best_san?`<b>${vcur.best_san}</b> was best.`:`Best was ${vcur.best_san||"another move"}.`}${vcur.note?" "+vcur.note+".":""} Eval is now ${evs}.`;
+      B.innerHTML=`<div class="row">${ico(vcur.classification,20)}<span class="label">${vcur.classification}</span><span class="ev">${evs}</span></div><div class="sub">${sub} <a href="#" id="bubbleResume" style="color:var(--green-300);font-weight:700;text-decoration:underline;margin-left:4px">Resume Review</a></div>`;
       return;
     }
     const e=variation.mate!=null?`M${Math.abs(variation.mate)}`:variation.cp==null?"…":`${variation.cp>=0?"+":"-"}${(Math.abs(variation.cp)/100).toFixed(2)}`;
     B.innerHTML=`<div class="row"><span class="label">Analysis (Exploring)</span><span class="ev">${e}</span></div>
-      <div class="sub">${variation.best_san?`Best move here is <b>${variation.best_san}</b>.`:"Analyzing move with Stockfish…"} Make more moves, or click ✕ to return to the game.</div>`;
+      <div class="sub">${variation.best_san?`Best move here is <b>${variation.best_san}</b>.`:"Analyzing move with Stockfish…"} Click <a href="#" id="bubbleResume" style="color:var(--green-300);font-weight:700;text-decoration:underline">Resume</a> to return to the review.</div>`;
     return;
   }
   if(!cur){B.innerHTML=`<div class="row"><span class="label">Let's review your game.</span></div><div class="sub">${data.summary.white} vs ${data.summary.black} · ${data.summary.result}</div>`;return}
@@ -998,8 +1031,8 @@ function uciXY(u){let[fx,fy]=sqXY(u.slice(0,2)),[tx,ty]=sqXY(u.slice(2,4));
 function drawArrows(cur,from,to){
   const A=$("arrows");A.innerHTML="";
   if(!showArrows)return;
-  const vlast=variation&&variation.moves.length?variation.moves[variation.moves.length-1]:null;
-  const activeMove=cur||vlast;
+  const vcur=variation&&(variation.index>0)?variation.moves[variation.index-1]:null;
+  const activeMove=cur||vcur;
   const els=[];
   if(!activeMove){
     if(data&&data.moves&&data.moves.length&&data.moves[0].best_uci)
@@ -1054,7 +1087,7 @@ function load(d){
   $("movelist").innerHTML=h;
   $("movelist").onclick=e=>{const t=e.target.closest(".node");if(t){go(+t.dataset.ply)}};
   $("summaryView").hidden=false;$("reviewView").hidden=true;
-  stopPlay();ply=0;render();loadLegal().then(()=>render());
+  stopPlay();if(variation)variation=null;ply=0;render();loadLegal().then(()=>render());
 }
 const go=n=>{if(!data)return;if(variation)variation=null;const prev=ply;ply=Math.max(0,Math.min(data.moves.length,n));if(ply===prev)return;if(ply>prev){const m=data.moves[ply-1];const isOpp=flipped?(m.color==="white"):(m.color==="black");if(m.classification==="Brilliant")SFX.brilliant();else if(/#/.test(m.san)||m.mate_delivered)SFX.end();else if(/\+/.test(m.san))SFX.check(isOpp);else if(/=/.test(m.san)||m.promotion)SFX.promote();else if(/^O-O/.test(m.san))SFX.castle();else if(/x/.test(m.san))SFX.capture();else SFX.move(isOpp);}else if(prev-ply===1){SFX.move(true);}animate(prev,ply);sel=null;render();loadLegal().then(()=>{if(!animating)render();});};
 $("start").onclick=()=>{SFX.start();$("summaryView").hidden=true;$("reviewView").hidden=false;go(1);loadLegal()};
@@ -1074,37 +1107,125 @@ function stopPlay(){
 }
 function startPlay(){
   if(timer)clearInterval(timer);
-  if(!data||!data.moves)return;
+  if(!data||!data.moves||variation)return;
   if(ply>=data.moves.length)go(0);
   setPlaying(true);
   timer=setInterval(()=>{
-    if(!data||ply>=data.moves.length){stopPlay();return}
+    if(!data||ply>=data.moves.length||variation){stopPlay();return}
     go(ply+1);
     if(ply>=data.moves.length)stopPlay();
   },900);
 }
 
-$("first").onclick=()=>{stopPlay();go(0)};
-$("prev").onclick=()=>{stopPlay();go(ply-1)};
-$("next").onclick=()=>{stopPlay();go(ply+1)};
-$("nextbtn").onclick=()=>{stopPlay();go(ply+1)};
-$("last").onclick=()=>{stopPlay();go(1e9)};
+function exitVariation(){
+  if(!variation)return;
+  variation=null;
+  sel=null;
+  render();
+  loadLegal().then(()=>{if(!animating)render();});
+}
+
+function stepBack(){
+  stopPlay();
+  if(variation){
+    if(variation.index>0){
+      setVariationIndex(variation.index-1);
+    }
+    return;
+  }
+  go(ply-1);
+}
+
+function stepForward(){
+  stopPlay();
+  if(variation){
+    if(variation.index<variation.moves.length){
+      setVariationIndex(variation.index+1);
+    }
+    return;
+  }
+  go(ply+1);
+}
+
+async function setVariationIndex(idx){
+  if(!variation)return;
+  const oldIdx=variation.index;
+  const targetIdx=Math.max(0,Math.min(variation.moves.length,idx));
+  if(targetIdx===oldIdx)return;
+  variation.index=targetIdx;
+  sel=null;
+  if(targetIdx>oldIdx){
+    const m=variation.moves[targetIdx-1];
+    if(m){
+      try{sfxFor(m,m.turn==="w"?"black":"white")}catch(e){SFX.move(true)}
+    }
+  } else {
+    SFX.move(true);
+  }
+  render();
+  await loadLegal();
+  if(!animating)render();
+
+  if(targetIdx>0){
+    const m=variation.moves[targetIdx-1];
+    if(m.eval_after_cp!=null){
+      variation.cp=m.eval_after_cp;
+      variation.mate=m.mate_after;
+      variation.best_uci=m.threat_uci||m.best_uci;
+      variation.best_san=m.threat_san||m.best_san;
+      render();
+    } else {
+      refreshVariation();
+    }
+  } else {
+    refreshVariation();
+  }
+}
+
+$("first").onclick=()=>{stopPlay();if(variation){setVariationIndex(0);return;}go(0)};
+$("prev").onclick=()=>{stepBack()};
+$("next").onclick=()=>{stepForward()};
+$("nextbtn").onclick=()=>{stopPlay();if(variation){exitVariation();return;}go(ply+1)};
+$("last").onclick=()=>{stopPlay();if(variation){setVariationIndex(variation.moves.length);return;}go(1e9)};
 $("play").onclick=()=>{if(timer)stopPlay();else startPlay()};
 $("showbest").onclick=e=>{showArrows=!showArrows;e.currentTarget.classList.toggle("off",!showArrows);render()};
-$("explain").onclick=()=>{SFX.notify();const c=data.moves[ply-1];if(c)alert(`${c.san}: ${c.classification}. Best was ${c.best_san}. Eval ${c.eval_before_cp/100} → ${c.eval_after_cp/100}.`)};
+$("explain").onclick=()=>{
+  SFX.notify();
+  if(variation){
+    const vcur=(variation.index>0)?variation.moves[variation.index-1]:null;
+    if(vcur&&vcur.classification){
+      alert(`${vcur.san}: ${vcur.classification}.${vcur.best_san?` Best was ${vcur.best_san}.`:""} Eval ${vcur.eval_after_cp!=null?(vcur.eval_after_cp/100).toFixed(2):"—"}.`);
+    } else {
+      alert("Analysis in progress. Try different moves or click Resume to return to the game review.");
+    }
+    return;
+  }
+  const c=data.moves[ply-1];
+  if(c)alert(`${c.san}: ${c.classification}. Best was ${c.best_san}. Eval ${c.eval_before_cp/100} → ${c.eval_after_cp/100}.`);
+};
 $("flip").onclick=()=>{flipped=!flipped;if(data)render()};
-document.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"){stopPlay();go(ply-1);}if(e.key==="ArrowRight"){stopPlay();go(ply+1);}if(e.key===" "&&!e.target.closest("input,textarea")){e.preventDefault();if(timer)stopPlay();else startPlay();}if(e.key==="f")$("flip")?.click()});
+document.addEventListener("keydown",e=>{
+  if(e.key==="ArrowLeft"){stepBack();}
+  if(e.key==="ArrowRight"){stepForward();}
+  if(e.key===" "&&!e.target.closest("input,textarea")){
+    e.preventDefault();
+    if(timer)stopPlay();
+    else if(!variation)startPlay();
+  }
+  if(e.key==="f")$("flip")?.click()
+});
 /* ---------- play moves on the board ---------- */
 async function enterVariation(){
   if(variation)return;
-  variation={fen:currentFen(),moves:[],startPly:ply,cp:null,mate:null,best_uci:null,best_san:null};
+  const sFen=currentFen();
+  variation={startFen:sFen,fen:sFen,moves:[],startPly:ply,index:0,cp:null,mate:null,best_uci:null,best_san:null};
 }
 let anTok=0;
 async function refreshVariation(){
   await loadLegal();render();
-  const fen=variation.fen,tok=++anTok;
+  const fen=currentFen(),tok=++anTok;
   const r=await api("/api/analyze",{fen,time:.6});
-  if(r&&!r.error&&variation&&tok===anTok&&variation.fen===fen){
+  if(r&&!r.error&&variation&&tok===anTok&&currentFen()===fen){
     Object.assign(variation,{cp:r.cp,mate:r.mate,best_uci:r.best_uci,best_san:r.best_san});render();}
 }
 async function playMove(from,to){
@@ -1112,9 +1233,13 @@ async function playMove(from,to){
   const r=await api("/api/move",{fen,uci:from+to});
   if(!r||r.error){SFX.illegal();sel=null;render();return}
   if(!variation)await enterVariation();
-  const prevFen=variation.fen;
-  const moveObj={san:r.san,uci:r.uci,fen:r.fen,prevFen,classification:null,eval_after_cp:null,mate_after:null,best_san:null,best_uci:null,threat_san:null,threat_uci:null,note:""};
+  if(variation.index<variation.moves.length){
+    variation.moves=variation.moves.slice(0,variation.index);
+  }
+  const prevFen=fen;
+  const moveObj={san:r.san,uci:r.uci,fen:r.fen,prevFen,capture:r.capture,castle:r.castle,promotion:r.promotion,check:r.check,mate:r.mate,over:r.over,turn:r.turn,classification:null,eval_after_cp:null,mate_after:null,best_san:null,best_uci:null,threat_san:null,threat_uci:null,note:""};
   variation.moves.push(moveObj);
+  variation.index=variation.moves.length;
   variation.fen=r.fen;
   variation.cp=null;variation.mate=null;
   sel=null;try{sfxFor(r,r.turn==="w"?"black":"white")}catch(e){}
@@ -1177,18 +1302,21 @@ async function playMove(from,to){
     moveObj.mate_after=c.mate_after;
     moveObj.note=c.note;
 
-    variation.cp=c.eval_after_cp;
-    variation.mate=c.mate_after;
-    variation.best_uci=c.threat_uci||c.best_uci;
-    variation.best_san=c.threat_san||c.best_san;
+    if(variation.index===variation.moves.indexOf(moveObj)+1){
+      variation.cp=c.eval_after_cp;
+      variation.mate=c.mate_after;
+      variation.best_uci=c.threat_uci||c.best_uci;
+      variation.best_san=c.threat_san||c.best_san;
 
-    if(c.classification==="Brilliant") SFX.brilliant();
-    render();
-    loadLegal();
+      if(c.classification==="Brilliant") SFX.brilliant();
+      render();
+      loadLegal();
+    }
   });
 }
-function exitVariation(){variation=null;sel=null;loadLegal();render()}
 $("exitvar").onclick=exitVariation;
+$("varline").onclick=e=>{const t=e.target.closest(".vnode");if(t&&t.dataset.vidx){stopPlay();setVariationIndex(+t.dataset.vidx);}};
+$("bubble").onclick=e=>{if(e.target.closest("#bubbleResume")){e.preventDefault();exitVariation();}};
 $("mute").onclick=e=>{muted=!muted;e.currentTarget.innerHTML=muted?"&#128263;":"&#128266;"};
 
 $("board").addEventListener("pointerdown",async e=>{
