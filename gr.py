@@ -7,7 +7,7 @@ Game Review — one command.
   python3 gr.py exhaustknight 173871734098     a specific chess.com game id
   python3 gr.py "<chess.com game url>"         paste a URL (must contain ?username=)
 
-Options: --time 1 (seconds/move) --engine PATH --port 8000 --no-open --skip-analysis
+Options: --time 1 (seconds/move) --engine PATH --host 127.0.0.1 --port 8000 --no-open --skip-analysis
 
 While the page is open the same server also answers:
   GET  /api/legal?fen=...            legal moves for a position
@@ -270,9 +270,9 @@ def find_engine(explicit):
 def run_review(engine, target, game_id, movetime, out):
     cmd = [sys.executable, os.path.join(HERE, "review.py"), "--engine", engine,
            "--time", str(movetime), "--json", out]
-    m = re.search(r"chess\.com/.*?/(\d{6,})", target)
+    m = re.search(r"chess\.com/.*?/(\\d{6,})", target)
     if m:
-        u = re.search(r"username=([\w-]+)", target)
+        u = re.search(r"username=([\\w-]+)", target)
         if not u: sys.exit("URL has no ?username= — use: python3 gr.py USERNAME GAMEID")
         cmd += ["--chesscom", u.group(1), "--game-id", m.group(1)]
     elif os.path.exists(target): cmd.append(target)
@@ -290,6 +290,7 @@ def main():
     ap = argparse.ArgumentParser(usage=__doc__)
     ap.add_argument("target", nargs="?"); ap.add_argument("game_id", nargs="?")
     ap.add_argument("--engine"); ap.add_argument("--time", type=float, default=1.0)
+    ap.add_argument("--host", default="127.0.0.1", help="host address to bind (default: 127.0.0.1)")
     ap.add_argument("--port", type=int, default=8000); ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--skip-analysis", action="store_true", help="serve the last result without re-analysing")
     a = ap.parse_args()
@@ -300,8 +301,12 @@ def main():
     out = os.path.join(UI, "out.json")
     if a.target and not a.skip_analysis: run_review(ENGINE_PATH, a.target, a.game_id, a.time, out)
 
-    with Server(("127.0.0.1", a.port), Handler) as httpd:
-        url = f"http://localhost:{a.port}"
+    if a.host not in ("127.0.0.1", "localhost"):
+        print(f"WARNING: Binding to non-loopback interface '{a.host}'. Review APIs are unauthenticated; place behind a trusted reverse proxy.")
+
+    with Server((a.host, a.port), Handler) as httpd:
+        host_display = "localhost" if a.host in ("127.0.0.1", "0.0.0.0") else a.host
+        url = f"http://{host_display}:{a.port}"
         print(f"\nReview ready → {url}    (ctrl-C to stop)")
         if not a.no_open: threading.Timer(0.6, lambda: webbrowser.open(url)).start()
         try: httpd.serve_forever()
