@@ -9,7 +9,7 @@ Requires: pip install python-chess requests
 Optional: openings/*.tsv from https://github.com/lichess-org/chess-openings (for "Book" moves) —
           downloaded automatically on first run if missing and network allows.
 """
-import argparse, json, math, os, statistics, sys, io
+import argparse, json, math, os, sys, io, threading, urllib.parse
 import chess, chess.engine, chess.pgn
 
 MATE_CP = 10000
@@ -53,26 +53,53 @@ def base_class(loss: float, is_best: bool, cp_loss: int = 0, w_best: float = 50.
     return cls
 
 # ---------- opening book ----------
-def load_book():
+_BOOK = None
+_BOOK_LOCK = threading.Lock()
+
+def _download_book(d, files):
+    """Fetch the ECO TSVs, writing each atomically so a failure can't leave a truncated file."""
+    import requests
+    os.makedirs(d, exist_ok=True)
+    for f, p in zip("abcde", files):
+        r = requests.get(f"https://raw.githubusercontent.com/lichess-org/chess-openings/master/{f}.tsv", timeout=20)
+        r.raise_for_status()
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(r.text)
+        os.replace(tmp, p)
+
+def _build_book():
     book = {}
     d = os.path.join(HERE, "openings")
     files = [os.path.join(d, f + ".tsv") for f in "abcde"]
     if not all(os.path.exists(f) for f in files):
         try:
-            import requests
-            os.makedirs(d, exist_ok=True)
-            for f, p in zip("abcde", files):
-                open(p, "w").write(requests.get(f"https://raw.githubusercontent.com/lichess-org/chess-openings/master/{f}.tsv", timeout=20).text)
+            _download_book(d, files)
         except Exception as e:
             print(f"(no opening book: {e})", file=sys.stderr); return book
     for p in files:
-        for line in open(p).read().splitlines()[1:]:
-            eco, name, pgn = line.split("\t")
-            g = chess.pgn.read_game(io.StringIO(pgn)); b = g.board()
+        with open(p, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        for line in lines[1:]:
+            parts = line.split("\t")
+            if len(parts) < 3: continue                          # blank or malformed row
+            eco, name, pgn = parts[0], parts[1], parts[2]
+            g = chess.pgn.read_game(io.StringIO(pgn))
+            if g is None: continue
+            b = g.board()
             for mv in g.mainline_moves():
                 b.push(mv); book.setdefault(b._transposition_key(), None)
-            book[b._transposition_key()] = f"{eco} {name}"          # name lives at the END of its line
+            book[b._transposition_key()] = f"{eco} {name}"        # name lives at the END of its line
     return book
+
+def load_book(force=False):
+    """Parse the ECO book once per process. Rebuilding it costs ~1.2s, which used to be
+    paid on every /api/classify request while holding the engine lock."""
+    global _BOOK
+    with _BOOK_LOCK:
+        if _BOOK is None or force:
+            _BOOK = _build_book()
+        return _BOOK
 
 # ---------- material / tactics ----------
 def material(board, color):
@@ -120,22 +147,25 @@ def hangs_piece(board_after, mover):
 
 # ---------- analysis ----------
 def analyse_game(game, engine_path, depth=18, multipv=2, threads=2, book=None, movetime=None, progress_cb=None):
-    engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-    engine.configure({"Threads": threads, "Hash": 256})
     limit = chess.engine.Limit(time=movetime) if movetime is not None else chess.engine.Limit(depth=depth or 18)
     moves = list(game.mainline_moves())
     positions = []; b = game.board()
     total = len(moves) + 1
-    for i in range(total):
+    engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+    try:
+        engine.configure({"Threads": threads, "Hash": 256})
+        for i in range(total):
+            if progress_cb:
+                try: progress_cb(i, total)
+                except Exception: pass
+            positions.append({"board": b.copy(), "info": engine.analyse(b, limit, multipv=multipv)})
+            if i < len(moves): b.push(moves[i])
         if progress_cb:
-            try: progress_cb(i, total)
+            try: progress_cb(total, total)
             except Exception: pass
-        positions.append({"board": b.copy(), "info": engine.analyse(b, limit, multipv=multipv)})
-        if i < len(moves): b.push(moves[i])
-    if progress_cb:
-        try: progress_cb(total, total)
-        except Exception: pass
-    engine.quit()
+    finally:
+        try: engine.quit()
+        except Exception: pass          # never leak a Stockfish process on an analysis error
 
     results = []; prev_base = None; in_book = True; opening_name = ""
     for i, mv in enumerate(moves):
@@ -241,10 +271,16 @@ def game_accuracy(results, color, _unused=None):
 
 # ---------- IO ----------
 
+DRAW_RESULTS = {"agreed", "repetition", "stalemate", "insufficient", "50move", "timevsinsufficient"}
+
+def _game_id_of(url: str) -> str:
+    return url.rstrip("/").rsplit("/", 1)[-1]
+
 def list_chesscom_games(user, limit=15):
     import requests, datetime
     h = {"User-Agent": "free-game-review/1.0"}
-    r = requests.get(f"https://api.chess.com/pub/player/{user}/games/archives", headers=h, timeout=10)
+    u = urllib.parse.quote(user, safe="")
+    r = requests.get(f"https://api.chess.com/pub/player/{u}/games/archives", headers=h, timeout=10)
     if r.status_code != 200:
         return []
     archives = r.json().get("archives", [])
@@ -255,14 +291,14 @@ def list_chesscom_games(user, limit=15):
         games = resp.json().get("games", [])
         for g in reversed(games):
             url = g.get("url", "")
-            gid = url.rstrip("/").split("/")[-1]
+            gid = _game_id_of(url)
             w = g.get("white", {})
             b = g.get("black", {})
             w_user = w.get("username", "")
             b_user = b.get("username", "")
             user_color = "white" if w_user.lower() == user.lower() else "black"
             user_res = w.get("result") if user_color == "white" else b.get("result")
-            res_type = "win" if user_res == "win" else ("draw" if user_res in ("agreed", "repetition", "stalemate", "timevsinsufficient", "insufficient") else "loss")
+            res_type = "win" if user_res == "win" else ("draw" if user_res in DRAW_RESULTS else "loss")
             end_t = g.get("end_time", 0)
             date_str = datetime.datetime.fromtimestamp(end_t).strftime("%b %d, %Y %H:%M") if end_t else ""
             out.append({
@@ -306,7 +342,8 @@ def review_game(game, engine_path, depth=None, threads=2, movetime=1.0, progress
 def fetch_chesscom(user, game_id=None):
     import requests
     h = {"User-Agent": "free-game-review/1.0"}
-    r = requests.get(f"https://api.chess.com/pub/player/{user}/games/archives", headers=h, timeout=10)
+    u = urllib.parse.quote(user, safe="")
+    r = requests.get(f"https://api.chess.com/pub/player/{u}/games/archives", headers=h, timeout=10)
     if r.status_code != 200:
         raise ValueError(f"Chess.com player '{user}' not found.")
     archives = r.json().get("archives", [])
@@ -314,7 +351,8 @@ def fetch_chesscom(user, game_id=None):
         resp = requests.get(url, headers=h, timeout=10)
         if resp.status_code != 200: continue
         for g in reversed(resp.json().get("games", [])):
-            if game_id is None or str(game_id) in g.get("url", ""):
+            # exact id match: substring matching made '1234' collide with '.../912345678'
+            if game_id is None or _game_id_of(g.get("url", "")) == str(game_id).strip():
                 return g["pgn"]
     raise ValueError(f"Game '{game_id or 'latest'}' not found for user '{user}'.")
 

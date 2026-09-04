@@ -23,6 +23,11 @@ UI = os.path.join(HERE, "ui")
 POOL = None
 ENGINE_PATH = None
 REVIEW_LOCK = threading.Lock()
+
+MAX_BODY_BYTES = 1 << 20        # 1 MB: nothing we accept is legitimately larger
+MAX_MOVETIME = 5.0              # seconds per position, per request
+MAX_PLIES = 600                 # refuse absurd PGNs rather than tie up the engine for hours
+
 REVIEW_STATUS = {
     "status": "idle",
     "current": 0,
@@ -32,6 +37,12 @@ REVIEW_STATUS = {
     "error": None,
     "data": None
 }
+
+def _clamp_time(raw, default, lo, hi):
+    try: t = float(raw)
+    except (TypeError, ValueError): t = default
+    if t != t: t = default          # NaN
+    return max(lo, min(hi, t))
 
 class Engines:
     """One shared engine protected by a lock to avoid leaking processes per request."""
@@ -48,22 +59,32 @@ class Engines:
             self.e.configure({"Threads": threads, "Hash": 256})
         return self.e
 
-    def analyse(self, board, limit, **kw):
+    def _reset(self):
+        """Drop a dead engine. Caller must already hold self.lock."""
+        if self.e is not None:
+            try: self.e.quit()
+            except Exception: pass
+            self.e = None
+
+    def _run(self, fn):
         with self.lock:
-            return self._ensure().analyse(board, limit, **kw)
+            try:
+                return fn(self._ensure())
+            except Exception:
+                # a crashed Stockfish used to wedge every later request forever
+                self._reset()
+                return fn(self._ensure())
+
+    def analyse(self, board, limit, **kw):
+        return self._run(lambda e: e.analyse(board, limit, **kw))
 
     def classify(self, b_before, move, limit=None, prev_base=None):
-        with self.lock:
-            return review.classify_single_move(b_before, move, self._ensure(), limit=limit, prev_base=prev_base)
+        return self._run(lambda e: review.classify_single_move(
+            b_before, move, e, limit=limit, book=review.load_book(), prev_base=prev_base))
 
     def close(self):
         with self.lock:
-            if self.e is not None:
-                try:
-                    self.e.quit()
-                except Exception:
-                    pass
-                self.e = None
+            self._reset()
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw): super().__init__(*a, directory=UI, **kw)
@@ -97,9 +118,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
-        n = int(self.headers.get("Content-Length", 0))
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            return self._send({"error": "bad content-length"}, 400)
+        if n < 0:
+            return self._send({"error": "bad content-length"}, 400)
+        if n > MAX_BODY_BYTES:
+            return self._send({"error": "request body too large"}, 413)
         try: body = json.loads(self.rfile.read(n) or b"{}")
         except Exception: return self._send({"error": "bad json"}, 400)
+        if not isinstance(body, dict): return self._send({"error": "bad json"}, 400)
         if self.path.startswith("/api/move"): return self._move(body)
         if self.path.startswith("/api/classify"): return self._classify(body)
         if self.path.startswith("/api/analyze"): return self._analyze(body)
@@ -133,7 +162,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send({"error": f"invalid input: {str(e)}"}, 400)
 
         import chess.engine
-        t = max(0.15, min(2.0, float(body.get("time", 0.35))))
+        t = _clamp_time(body.get("time", 0.35), 0.35, 0.15, 2.0)
         limit = chess.engine.Limit(time=t)
         prev_base = body.get("prev_base")
 
@@ -166,7 +195,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception: return self._send({"error": "bad fen"}, 400)
         if b.is_game_over():
             return self._send({"cp": 0, "mate": None, "best_uci": None, "best_san": None, "over": True})
-        t = max(.1, min(5.0, float(body.get("time", 0.6))))
+        t = _clamp_time(body.get("time", 0.6), 0.6, 0.1, MAX_MOVETIME)
         try: info = POOL.analyse(b, chess.engine.Limit(time=t), multipv=1)
         except Exception as e: return self._send({"error": str(e)}, 500)
         top = info[0] if isinstance(info, list) else info
@@ -176,11 +205,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "pv": [x.uci() for x in pv[:6]], "over": False})
 
     def _start_review(self, body):
-        global REVIEW_STATUS
         with REVIEW_LOCK:
             if REVIEW_STATUS.get("status") == "running":
                 return self._send({"error": "Analysis is already in progress"}, 409)
-            REVIEW_STATUS = {
+            REVIEW_STATUS.update({
                 "status": "running",
                 "current": 0,
                 "total": 0,
@@ -188,73 +216,90 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "message": "Fetching game data...",
                 "error": None,
                 "data": None
-            }
+            })
         t = threading.Thread(target=self._run_async_review, args=(body,), daemon=True)
         t.start()
         return self._send({"status": "started"})
 
     def _run_async_review(self, body):
-        global REVIEW_STATUS
-        import chess.pgn
+        """Wrapper that guarantees the status never stays 'running' after the thread ends.
+        It previously could: SystemExit/MemoryError are not Exception, so a death here left
+        every later review returning 409 until the process was restarted."""
         try:
-            username = body.get("username", "").strip() or None
-            game_id = body.get("game_id", "").strip() or None
-            url = body.get("url", "").strip()
-            pgn = body.get("pgn", "").strip()
-            movetime = float(body.get("time", 1.0))
-
-            if url:
-                m = re.search(r"chess\.com/.*?/(\d{6,})", url)
-                if m: game_id = m.group(1)
-                u = re.search(r"username=([\w-]+)", url)
-                if u and not username: username = u.group(1)
-
-            if pgn:
-                pgn_text = pgn
-            elif username:
-                with REVIEW_LOCK:
-                    REVIEW_STATUS["message"] = f"Fetching game from Chess.com for {username}..."
-                pgn_text = review.fetch_chesscom(username, game_id)
-            else:
-                raise ValueError("Please provide a username, Game ID, Chess.com URL, or PGN.")
-
-            game = chess.pgn.read_game(io.StringIO(pgn_text))
-            if not game:
-                raise ValueError("Could not parse chess game from PGN.")
-
-            def on_progress(curr, tot):
-                with REVIEW_LOCK:
-                    REVIEW_STATUS["current"] = curr
-                    REVIEW_STATUS["total"] = tot
-                    pct = round(curr / tot * 100) if tot else 0
-                    REVIEW_STATUS["percent"] = pct
-                    REVIEW_STATUS["message"] = f"Analyzing move {curr} of {tot} ({pct}%)..."
-
-            with REVIEW_LOCK:
-                REVIEW_STATUS["message"] = "Initializing Stockfish engine..."
-
-            engine_path = ENGINE_PATH or find_engine(None)
-            res_data = review.review_game(
-                game, engine_path, threads=2, movetime=movetime,
-                progress_cb=on_progress, username=username
-            )
-
-            out_file = os.path.join(UI, "out.json")
-            with open(out_file, "w") as f:
-                json.dump(res_data, f, indent=1)
-
-            with REVIEW_LOCK:
-                REVIEW_STATUS["status"] = "done"
-                REVIEW_STATUS["current"] = REVIEW_STATUS["total"]
-                REVIEW_STATUS["percent"] = 100
-                REVIEW_STATUS["message"] = "Analysis complete!"
-                REVIEW_STATUS["data"] = res_data
-
+            self._do_review(body)
         except Exception as e:
             with REVIEW_LOCK:
                 REVIEW_STATUS["status"] = "error"
                 REVIEW_STATUS["error"] = str(e)
                 REVIEW_STATUS["message"] = f"Error: {str(e)}"
+        finally:
+            with REVIEW_LOCK:
+                if REVIEW_STATUS.get("status") == "running":
+                    REVIEW_STATUS["status"] = "error"
+                    REVIEW_STATUS["error"] = REVIEW_STATUS.get("error") or "analysis stopped unexpectedly"
+                    REVIEW_STATUS["message"] = f"Error: {REVIEW_STATUS['error']}"
+
+    def _do_review(self, body):
+        import chess.pgn
+        username = body.get("username", "").strip() or None
+        game_id = body.get("game_id", "").strip() or None
+        url = body.get("url", "").strip()
+        pgn = body.get("pgn", "").strip()
+        movetime = _clamp_time(body.get("time", 1.0), 1.0, 0.05, MAX_MOVETIME)
+
+        if url:
+            m = re.search(r"chess\.com/.*?/(\d{6,})", url)
+            if m: game_id = m.group(1)
+            u = re.search(r"username=([\w-]+)", url)
+            if u and not username: username = u.group(1)
+
+        if pgn:
+            pgn_text = pgn
+        elif username:
+            with REVIEW_LOCK:
+                REVIEW_STATUS["message"] = f"Fetching game from Chess.com for {username}..."
+            pgn_text = review.fetch_chesscom(username, game_id)
+        else:
+            raise ValueError("Please provide a username, Game ID, Chess.com URL, or PGN.")
+
+        game = chess.pgn.read_game(io.StringIO(pgn_text))
+        if not game:
+            raise ValueError("Could not parse chess game from PGN.")
+        n_plies = sum(1 for _ in game.mainline_moves())
+        if n_plies == 0:
+            raise ValueError("That game has no moves to analyse.")
+        if n_plies > MAX_PLIES:
+            raise ValueError(f"Game is too long to analyse ({n_plies} plies, limit {MAX_PLIES}).")
+
+        def on_progress(curr, tot):
+            with REVIEW_LOCK:
+                REVIEW_STATUS["current"] = curr
+                REVIEW_STATUS["total"] = tot
+                pct = round(curr / tot * 100) if tot else 0
+                REVIEW_STATUS["percent"] = pct
+                REVIEW_STATUS["message"] = f"Analyzing move {curr} of {tot} ({pct}%)..."
+
+        with REVIEW_LOCK:
+            REVIEW_STATUS["message"] = "Initializing Stockfish engine..."
+
+        engine_path = ENGINE_PATH or find_engine(None)
+        res_data = review.review_game(
+            game, engine_path, threads=2, movetime=movetime,
+            progress_cb=on_progress, username=username
+        )
+
+        out_file = os.path.join(UI, "out.json")
+        tmp_file = out_file + ".tmp"
+        with open(tmp_file, "w") as f:
+            json.dump(res_data, f, indent=1)
+        os.replace(tmp_file, out_file)
+
+        with REVIEW_LOCK:
+            REVIEW_STATUS["status"] = "done"
+            REVIEW_STATUS["current"] = REVIEW_STATUS["total"]
+            REVIEW_STATUS["percent"] = 100
+            REVIEW_STATUS["message"] = "Analysis complete!"
+            REVIEW_STATUS["data"] = res_data
 
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True; daemon_threads = True
@@ -265,7 +310,10 @@ def find_engine(explicit):
         if os.path.sep in c and os.path.exists(c): return os.path.abspath(c)
         w = shutil.which(c)
         if w: return w
-    sys.exit("Stockfish not found. Install it (macOS: brew install stockfish) or pass --engine /path/to/stockfish")
+    # raise rather than sys.exit: this is also called from the review worker thread,
+    # where SystemExit would bypass the error handler and leave the status stuck.
+    raise RuntimeError("Stockfish not found. Install it (macOS: brew install stockfish) "
+                       "or pass --engine /path/to/stockfish")
 
 def run_review(engine, target, game_id, movetime, out):
     cmd = [sys.executable, os.path.join(HERE, "review.py"), "--engine", engine,
@@ -296,7 +344,11 @@ def main():
     a = ap.parse_args()
 
     if not os.path.isdir(UI): sys.exit(f"missing {UI}")
-    ENGINE_PATH = find_engine(a.engine); POOL = Engines(ENGINE_PATH)
+    try:
+        ENGINE_PATH = find_engine(a.engine)
+    except RuntimeError as e:
+        sys.exit(str(e))
+    POOL = Engines(ENGINE_PATH)
     atexit.register(lambda: POOL.close() if POOL else None)
     out = os.path.join(UI, "out.json")
     if a.target and not a.skip_analysis: run_review(ENGINE_PATH, a.target, a.game_id, a.time, out)
