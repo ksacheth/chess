@@ -174,6 +174,25 @@ button:focus-visible{outline:2px solid var(--blue-300);outline-offset:2px}
 .btn-choose-game:hover {
   background: var(--green-400);
 }
+.btn-lock {
+  background: #363430;
+  color: var(--white-72);
+  border-radius: var(--radius-5);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid #4a463f;
+}
+.btn-lock:hover {
+  background: #44413b;
+  color: #fff;
+  border-color: #5c574f;
+}
 
 /* Modal styles */
 .modal-backdrop {
@@ -506,7 +525,10 @@ button:focus-visible{outline:2px solid var(--blue-300);outline-offset:2px}
     <div class="panel-head">
       <button class="ic" id="back" aria-label="Back">&#8592;</button>
       <div class="title"><span class="star">&#9733;</span>Game Review</div>
-      <button class="btn-choose-game" id="btnHeaderChoose" title="Choose Game"><span>♟</span> Choose Game</button>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button class="btn-choose-game" id="btnHeaderChoose" title="Choose Game"><span>♟</span> Choose Game</button>
+        <button class="btn-lock" id="btnLogout" title="Lock &amp; Logout" style="display:none" hidden><span>🔒</span> Lock</button>
+      </div>
     </div>
     <div class="empty" id="empty">
       <div style="font-size:42px;margin-bottom:12px">&#9822;</div>
@@ -546,6 +568,27 @@ button:focus-visible{outline:2px solid var(--blue-300);outline-offset:2px}
       <div class="foot"><span>&#9733; Skills</span><span>&#8599; Share</span><button id="mute" aria-label="Sound">&#128266;</button><button id="flip" aria-label="Flip board">&#8645; Flip</button></div>
     </div>
   </aside>
+</div>
+
+<!-- Passcode Authentication Modal -->
+<div class="modal-backdrop" id="authModal" style="z-index: 10000;" hidden>
+  <div class="modal-card" style="max-width: 380px;">
+    <div class="modal-head">
+      <div class="title"><span>🔒</span> Passcode Required</div>
+    </div>
+    <div class="modal-body" style="padding: 24px 20px; text-align: center;">
+      <div style="font-size: 38px; margin-bottom: 8px;">♚</div>
+      <div style="font-size: 16px; font-weight: 800; color: #fff; margin-bottom: 6px;">Game Review</div>
+      <div style="font-size: 13px; color: var(--white-72); margin-bottom: 20px; line-height: 1.4;">
+        Enter the passcode to access Game Review and engine analysis.
+      </div>
+      <form id="authForm" onsubmit="return false;" style="display: flex; flex-direction: column; gap: 12px;">
+        <input type="password" class="input-field" id="authPasscodeInput" placeholder="Enter passcode" autocomplete="current-password" style="text-align: center; font-size: 15px; letter-spacing: 2px;">
+        <div id="authError" style="color: #fa412d; font-size: 13px; min-height: 16px; display: none;"></div>
+        <button type="submit" class="btn-fetch" id="authSubmitBtn" style="padding: 10px; font-size: 14px; font-weight: 700; width: 100%; justify-content: center;">Unlock</button>
+      </form>
+    </div>
+  </div>
 </div>
 
 <!-- Game Selector Modal -->
@@ -757,7 +800,24 @@ function sfxFor(m, color) {
 }
 
 /* ---------- server API ---------- */
-const api=(path,body)=>fetch(path,body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:undefined)
+function authFetch(url, options = {}) {
+  const token = localStorage.getItem("chess_token");
+  const headers = Object.assign({}, options.headers || {});
+  if (token && !headers["Authorization"]) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  options.headers = headers;
+
+  return fetch(url, options).then(res => {
+    if (res.status === 401) {
+      if (typeof showAuthModal === "function") showAuthModal();
+      throw new Error("Unauthorized");
+    }
+    return res;
+  });
+}
+
+const api=(path,body)=>authFetch(path,body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:undefined)
   .then(r=>r.json()).catch(()=>null);
 function currentFen(){
   if(variation){
@@ -1395,7 +1455,7 @@ async function fetchUserGames(user) {
   $m("gamesCount").textContent = "";
 
   try {
-    const res = await fetch(`/api/games?username=${encodeURIComponent(user)}`);
+    const res = await authFetch(`/api/games?username=${encodeURIComponent(user)}`);
     const d = await res.json();
     if (d.error) {
       listEl.innerHTML = `<div style="padding:20px 16px;text-align:center;color:#fa412d;font-size:13px">${d.error}</div>`;
@@ -1495,7 +1555,7 @@ async function startReview(payload) {
   $m("progCount").textContent = "Initializing...";
 
   try {
-    const res = await fetch("/api/review", {
+    const res = await authFetch("/api/review", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -1517,7 +1577,7 @@ async function startReview(payload) {
   if (pollInterval) clearInterval(pollInterval);
   pollInterval = setInterval(async () => {
     try {
-      const s = await fetch("/api/review-status").then(r => r.json());
+      const s = await authFetch("/api/review-status").then(r => r.json());
       if (s.status === "running") {
         $m("progFill").style.width = `${s.percent}%`;
         $m("progPct").textContent = `${s.percent}%`;
@@ -1547,20 +1607,136 @@ async function startReview(payload) {
   }, 350);
 }
 
-// Initial load check
-fetch("out.json")
-  .then(r => r.ok ? r.json() : null)
-  .then(d => {
-    if (d && d.moves && d.moves.length) {
-      load(d);
+/* ---------- Passcode Modal & Auth Logic ---------- */
+let authRequired = false;
+
+function showAuthModal() {
+  const modal = $m("authModal");
+  modal.hidden = false;
+  $m("authError").style.display = "none";
+  $m("authError").textContent = "";
+  setTimeout(() => $m("authPasscodeInput").focus(), 50);
+}
+
+function hideAuthModal() {
+  $m("authModal").hidden = true;
+  $m("authPasscodeInput").value = "";
+  $m("authError").style.display = "none";
+  $m("authError").textContent = "";
+}
+
+async function handleAuthSubmit() {
+  const passcode = $m("authPasscodeInput").value;
+  const btn = $m("authSubmitBtn");
+  const errEl = $m("authError");
+
+  if (!passcode) {
+    errEl.textContent = "Please enter the passcode.";
+    errEl.style.display = "block";
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Unlocking...";
+  errEl.style.display = "none";
+
+  try {
+    const res = await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ passcode })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      if (data.token) {
+        localStorage.setItem("chess_token", data.token);
+      }
+      hideAuthModal();
+      $m("btnLogout").style.display = "inline-flex";
+      loadInitialReview();
     } else {
-      openGameModal();
+      errEl.textContent = data.error || "Incorrect passcode.";
+      errEl.style.display = "block";
+      $m("authPasscodeInput").select();
     }
-  })
-  .catch(e => {
-    console.error("load failed", e);
-    openGameModal();
-  });
+  } catch (err) {
+    errEl.textContent = "Network error: " + err.message;
+    errEl.style.display = "block";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Unlock";
+  }
+}
+
+async function handleLogout() {
+  try {
+    await fetch("/api/logout", { method: "POST" });
+  } catch (e) {}
+  localStorage.removeItem("chess_token");
+  $m("btnLogout").style.display = "none";
+  showAuthModal();
+}
+
+$m("authForm").onsubmit = e => {
+  e.preventDefault();
+  handleAuthSubmit();
+};
+$m("btnLogout").onclick = handleLogout;
+
+function loadInitialReview() {
+  authFetch("out.json")
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (d && d.moves && d.moves.length) {
+        load(d);
+      } else {
+        openGameModal();
+      }
+    })
+    .catch(e => {
+      if (e.message !== "Unauthorized") {
+        console.error("load failed", e);
+        openGameModal();
+      }
+    });
+}
+
+// Check authentication on startup
+async function initAuth() {
+  try {
+    const res = await fetch("/api/auth-status");
+    const data = await res.json();
+    authRequired = !!data.auth_required;
+    if (authRequired) {
+      if (data.authenticated) {
+        $m("btnLogout").style.display = "inline-flex";
+        loadInitialReview();
+      } else {
+        const storedToken = localStorage.getItem("chess_token");
+        if (storedToken) {
+          try {
+            const check = await fetch("/api/auth-status", {
+              headers: { "Authorization": `Bearer ${storedToken}` }
+            }).then(r => r.json());
+            if (check.authenticated) {
+              $m("btnLogout").style.display = "inline-flex";
+              loadInitialReview();
+              return;
+            }
+          } catch (_) {}
+        }
+        showAuthModal();
+      }
+    } else {
+      $m("btnLogout").style.display = "none";
+      loadInitialReview();
+    }
+  } catch (e) {
+    loadInitialReview();
+  }
+}
+
+initAuth();
 
 </script>
 </body>

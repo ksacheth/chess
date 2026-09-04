@@ -7,7 +7,7 @@ Game Review — one command.
   python3 gr.py exhaustknight 173871734098     a specific chess.com game id
   python3 gr.py "<chess.com game url>"         paste a URL (must contain ?username=)
 
-Options: --time 1 (seconds/move) --engine PATH --host 127.0.0.1 --port 8000 --no-open --skip-analysis
+Options: --time 1 (seconds/move) --engine PATH --host 127.0.0.1 --port 8000 --password PASS --no-auth --no-open --skip-analysis
 
 While the page is open the same server also answers:
   GET  /api/legal?fen=...            legal moves for a position
@@ -15,7 +15,7 @@ While the page is open the same server also answers:
   POST /api/analyze {fen, time}      eval, best move, principal variation
 so you can play your own moves on the board and keep getting analysis.
 """
-import argparse, atexit, http.server, io, json, os, re, shutil, socketserver, subprocess, sys, threading, urllib.parse, webbrowser
+import argparse, atexit, hashlib, hmac, http.cookies, http.server, io, json, os, re, secrets, shutil, socketserver, subprocess, sys, threading, urllib.parse, webbrowser
 import review
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +37,67 @@ REVIEW_STATUS = {
     "error": None,
     "data": None
 }
+
+def load_dotenv(filepath=None):
+    if filepath is None:
+        filepath = os.path.join(HERE, ".env")
+    if not os.path.isfile(filepath):
+        return
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip()
+                    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                        v = v[1:-1]
+                    if k not in os.environ:
+                        os.environ[k] = v
+    except Exception:
+        pass
+
+load_dotenv()
+
+AUTH_PASSCODE = None
+AUTH_SECRET = None
+
+def init_auth_secret():
+    global AUTH_SECRET
+    env_sec = os.environ.get("CHESS_SECRET")
+    if env_sec:
+        AUTH_SECRET = env_sec.encode()
+        return
+    secret_file = os.path.join(HERE, ".auth_secret")
+    if os.path.exists(secret_file):
+        try:
+            with open(secret_file, "rb") as f:
+                content = f.read().strip()
+                if content:
+                    AUTH_SECRET = content
+                    return
+        except Exception:
+            pass
+    AUTH_SECRET = secrets.token_bytes(32)
+    try:
+        with open(secret_file, "wb") as f:
+            f.write(AUTH_SECRET)
+    except Exception:
+        pass
+
+def generate_auth_token(passcode):
+    if AUTH_SECRET is None:
+        init_auth_secret()
+    return hmac.new(AUTH_SECRET, f"chess:{passcode}".encode(), hashlib.sha256).hexdigest()
+
+def verify_auth_token(token, passcode):
+    if not token or not passcode:
+        return False
+    expected = generate_auth_token(passcode)
+    return hmac.compare_digest(token, expected)
 
 def _clamp_time(raw, default, lo, hi):
     try: t = float(raw)
@@ -98,7 +159,71 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass                    # client moved on (superseded analysis) — not an error
 
+    def _is_authenticated(self):
+        if not AUTH_PASSCODE:
+            return True
+        cookie_header = self.headers.get("Cookie")
+        if cookie_header:
+            try:
+                c = http.cookies.SimpleCookie()
+                c.load(cookie_header)
+                if "chess_auth" in c:
+                    if verify_auth_token(c["chess_auth"].value, AUTH_PASSCODE):
+                        return True
+            except Exception:
+                pass
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+            if verify_auth_token(token, AUTH_PASSCODE):
+                return True
+        x_pass = self.headers.get("X-Passcode", "")
+        if x_pass and x_pass == AUTH_PASSCODE:
+            return True
+        return False
+
+    def _auth(self, body):
+        if not AUTH_PASSCODE:
+            return self._send({"success": True, "token": ""})
+        passcode = body.get("passcode")
+        if passcode is None or not isinstance(passcode, str) or passcode != AUTH_PASSCODE:
+            return self._send({"error": "Incorrect passcode"}, 401)
+        token = generate_auth_token(AUTH_PASSCODE)
+        b = json.dumps({"success": True, "token": token}).encode()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b)))
+            self.send_header("Set-Cookie", f"chess_auth={token}; Path=/; SameSite=Lax; Max-Age=2592000; HttpOnly")
+            self.end_headers()
+            self.wfile.write(b)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _logout(self):
+        b = json.dumps({"success": True}).encode()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b)))
+            self.send_header("Set-Cookie", "chess_auth=; Path=/; SameSite=Lax; Max-Age=0; HttpOnly")
+            self.end_headers()
+            self.wfile.write(b)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def do_GET(self):
+        clean_path = urllib.parse.urlparse(self.path).path
+        if clean_path == "/api/auth-status":
+            return self._send({
+                "auth_required": bool(AUTH_PASSCODE),
+                "authenticated": self._is_authenticated()
+            })
+
+        if AUTH_PASSCODE and not self._is_authenticated():
+            if clean_path.startswith("/api/") or clean_path in ("/out.json", "/ui/out.json"):
+                return self._send({"error": "Unauthorized"}, 401)
+
         if self.path.startswith("/api/legal"):
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             return self._legal(q.get("fen", [""])[0])
@@ -129,6 +254,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         try: body = json.loads(self.rfile.read(n) or b"{}")
         except Exception: return self._send({"error": "bad json"}, 400)
         if not isinstance(body, dict): return self._send({"error": "bad json"}, 400)
+
+        clean_path = urllib.parse.urlparse(self.path).path
+        if clean_path == "/api/auth":
+            return self._auth(body)
+        if clean_path == "/api/logout":
+            return self._logout()
+
+        if AUTH_PASSCODE and not self._is_authenticated():
+            return self._send({"error": "Unauthorized"}, 401)
+
         if self.path.startswith("/api/move"): return self._move(body)
         if self.path.startswith("/api/classify"): return self._classify(body)
         if self.path.startswith("/api/analyze"): return self._analyze(body)
@@ -335,13 +470,16 @@ def run_review(engine, target, game_id, movetime, out):
         json.dump(d, open(out, "w"))
 
 def main():
-    global POOL, ENGINE_PATH
+    global POOL, ENGINE_PATH, AUTH_PASSCODE
     ap = argparse.ArgumentParser(usage=__doc__)
     ap.add_argument("target", nargs="?"); ap.add_argument("game_id", nargs="?")
     ap.add_argument("--engine"); ap.add_argument("--time", type=float, default=1.0)
     ap.add_argument("--host", default="127.0.0.1", help="host address to bind (default: 127.0.0.1)")
     ap.add_argument("--port", type=int, default=8000); ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--skip-analysis", action="store_true", help="serve the last result without re-analysing")
+    ap.add_argument("--password", "--passcode", dest="password", default=None,
+                    help="passcode required to access UI and review APIs (default: env CHESS_PASSWORD or 'chess')")
+    ap.add_argument("--no-auth", action="store_true", help="disable passcode authentication")
     a = ap.parse_args()
 
     if not os.path.isdir(UI): sys.exit(f"missing {UI}")
@@ -351,16 +489,37 @@ def main():
         sys.exit(str(e))
     POOL = Engines(ENGINE_PATH)
     atexit.register(lambda: POOL.close() if POOL else None)
+
+    if a.no_auth:
+        AUTH_PASSCODE = None
+    else:
+        AUTH_PASSCODE = (
+            a.password
+            or os.environ.get("CHESS_PASSWORD")
+            or os.environ.get("CHESS_PASSCODE")
+            or os.environ.get("PASSWORD")
+            or os.environ.get("PASSCODE")
+            or "chess"
+        )
+    init_auth_secret()
+
     out = os.path.join(UI, "out.json")
     if a.target and not a.skip_analysis: run_review(ENGINE_PATH, a.target, a.game_id, a.time, out)
 
     if a.host not in ("127.0.0.1", "localhost"):
-        print(f"WARNING: Binding to non-loopback interface '{a.host}'. Review APIs are unauthenticated; place behind a trusted reverse proxy.")
+        if not AUTH_PASSCODE:
+            print(f"WARNING: Binding to non-loopback interface '{a.host}' with authentication disabled!")
+        else:
+            print(f"Binding to interface '{a.host}' protected with passcode.")
 
     with Server((a.host, a.port), Handler) as httpd:
         host_display = "localhost" if a.host in ("127.0.0.1", "0.0.0.0") else a.host
         url = f"http://{host_display}:{a.port}"
         print(f"\nReview ready → {url}    (ctrl-C to stop)")
+        if AUTH_PASSCODE:
+            print(f"Passcode: {AUTH_PASSCODE}    (--password <pass> or env CHESS_PASSWORD to change, --no-auth to disable)")
+        else:
+            print("Authentication: disabled (--no-auth)")
         if not a.no_open: threading.Timer(0.6, lambda: webbrowser.open(url)).start()
         try: httpd.serve_forever()
         except KeyboardInterrupt: print("\nstopped")

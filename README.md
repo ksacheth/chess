@@ -29,7 +29,9 @@ python3 gr.py tests/game2.pgn                # any PGN file
 ```
 (`chmod +x gr.py` once if you'd rather type `./gr.py`.)
 
-Options: `--time 2` (slower, more accurate) · `--engine /path/to/stockfish` · `--port 8080` · `--no-open`
+Options: `--time 2` (slower, more accurate) · `--engine /path/to/stockfish` · `--port 8080` · `--password PASS` · `--no-auth` · `--no-open`
+
+- **Passcode Protection:** Enabled by default (passcode: `chess`). Customize via `--password <pass>` or `export CHESS_PASSWORD=...`. Disable with `--no-auth`. A Lock / Logout button is available in the UI header.
 
 ## What you get
 Board with move highlights and classification badges, arrows, animated moves, sound, eval bar and
