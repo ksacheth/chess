@@ -506,6 +506,30 @@ button:focus-visible{outline:2px solid var(--blue-300);outline-offset:2px}
   font-weight: 700;
   color: var(--white-50);
 }
+.btn-cancel-review {
+  margin-top: 6px;
+  background: rgba(250, 65, 45, 0.15);
+  border: 1px solid rgba(250, 65, 45, 0.4);
+  color: #ff7769;
+  border-radius: var(--radius-5);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 18px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn-cancel-review:hover {
+  background: rgba(250, 65, 45, 0.3);
+  color: #fff;
+  border-color: #fa412d;
+}
+.btn-cancel-review:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 @media (prefers-reduced-motion:reduce){.evalbar .fill{transition:none}}
 </style>
@@ -668,6 +692,7 @@ button:focus-visible{outline:2px solid var(--blue-300);outline-offset:2px}
       <span id="progPct">0%</span>
       <span id="progCount">Preparing positions...</span>
     </div>
+    <button class="btn-cancel-review" id="btnCancelReview" type="button">✕ Cancel Analysis</button>
   </div>
 </div>
 
@@ -1427,9 +1452,15 @@ $m("btnHeaderChoose").onclick = openGameModal;
 $m("btnEmptyChoose").onclick = openGameModal;
 $m("modalCloseBtn").onclick = closeGameModal;
 
-// Close modal on Escape key
+// Close modal or cancel analysis on Escape key
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && !$m("gameModal").hidden) closeGameModal();
+  if (e.key === "Escape") {
+    if (!$m("progressModal").hidden) {
+      cancelReview();
+    } else if (!$m("gameModal").hidden) {
+      closeGameModal();
+    }
+  }
 });
 
 // Tab switching
@@ -1549,6 +1580,8 @@ let pollInterval = null;
 async function startReview(payload) {
   closeGameModal();
   $m("progressModal").hidden = false;
+  $m("btnCancelReview").disabled = false;
+  $m("btnCancelReview").textContent = "✕ Cancel Analysis";
   $m("progFill").style.width = "0%";
   $m("progPct").textContent = "0%";
   $m("progSub").textContent = "Starting Stockfish review...";
@@ -1594,6 +1627,11 @@ async function startReview(payload) {
           SFX.start();
           load(s.data);
         }, 300);
+      } else if (s.status === "cancelled") {
+        clearInterval(pollInterval);
+        pollInterval = null;
+        $m("progressModal").hidden = true;
+        openGameModal();
       } else if (s.status === "error") {
         clearInterval(pollInterval);
         pollInterval = null;
@@ -1606,6 +1644,19 @@ async function startReview(payload) {
     }
   }, 350);
 }
+
+async function cancelReview() {
+  const btn = $m("btnCancelReview");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = "Cancelling...";
+  try {
+    await authFetch("/api/cancel-review", { method: "POST" });
+  } catch (e) {
+    console.error("Failed to cancel review:", e);
+  }
+}
+$m("btnCancelReview").onclick = cancelReview;
 
 /* ---------- Passcode Modal & Auth Logic ---------- */
 let authRequired = false;

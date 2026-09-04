@@ -146,24 +146,32 @@ def hangs_piece(board_after, mover):
     return best
 
 # ---------- analysis ----------
-def analyse_game(game, engine_path, depth=18, multipv=2, threads=2, book=None, movetime=None, progress_cb=None):
+def analyse_game(game, engine_path, depth=18, multipv=2, threads=2, book=None, movetime=None, progress_cb=None, cancel_event=None, engine_ref=None):
     limit = chess.engine.Limit(time=movetime) if movetime is not None else chess.engine.Limit(depth=depth or 18)
     moves = list(game.mainline_moves())
     positions = []; b = game.board()
     total = len(moves) + 1
     engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+    if engine_ref is not None and isinstance(engine_ref, list):
+        engine_ref[0] = engine
     try:
         engine.configure({"Threads": threads, "Hash": 256})
         for i in range(total):
+            if cancel_event and cancel_event.is_set():
+                raise InterruptedError("Analysis cancelled by user")
             if progress_cb:
                 try: progress_cb(i, total)
                 except Exception: pass
             positions.append({"board": b.copy(), "info": engine.analyse(b, limit, multipv=multipv)})
+            if cancel_event and cancel_event.is_set():
+                raise InterruptedError("Analysis cancelled by user")
             if i < len(moves): b.push(moves[i])
         if progress_cb:
             try: progress_cb(total, total)
             except Exception: pass
     finally:
+        if engine_ref is not None and isinstance(engine_ref, list):
+            engine_ref[0] = None
         try: engine.quit()
         except Exception: pass          # never leak a Stockfish process on an analysis error
 
@@ -378,9 +386,9 @@ def list_chesscom_games(user, limit=15):
                 return out
     return out
 
-def review_game(game, engine_path, depth=None, threads=2, movetime=1.0, progress_cb=None, username=None):
+def review_game(game, engine_path, depth=None, threads=2, movetime=1.0, progress_cb=None, username=None, cancel_event=None, engine_ref=None):
     book = load_book()
-    res = analyse_game(game, engine_path, depth=depth, threads=threads, book=book, movetime=movetime, progress_cb=progress_cb)
+    res = analyse_game(game, engine_path, depth=depth, threads=threads, book=book, movetime=movetime, progress_cb=progress_cb, cancel_event=cancel_event, engine_ref=engine_ref)
     wps = [win_pct(r["eval_after_cp"]) for r in res]
     white = game.headers.get("White", "White")
     black = game.headers.get("Black", "Black")

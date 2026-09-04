@@ -37,6 +37,8 @@ REVIEW_STATUS = {
     "error": None,
     "data": None
 }
+REVIEW_CANCEL_EVENT = threading.Event()
+CURRENT_REVIEW_ENGINE = [None]
 
 def load_dotenv(filepath=None):
     if filepath is None:
@@ -267,6 +269,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path.startswith("/api/move"): return self._move(body)
         if self.path.startswith("/api/classify"): return self._classify(body)
         if self.path.startswith("/api/analyze"): return self._analyze(body)
+        if self.path.startswith("/api/cancel-review"): return self._cancel_review()
         if self.path.startswith("/api/review"): return self._start_review(body)
         return self._send({"error": "not found"}, 404)
 
@@ -339,10 +342,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "best_uci": pv[0].uci() if pv else None, "best_san": b.san(pv[0]) if pv else None,
                     "pv": [x.uci() for x in pv[:6]], "over": False})
 
+    def _cancel_review(self):
+        global CURRENT_REVIEW_ENGINE
+        with REVIEW_LOCK:
+            if REVIEW_STATUS.get("status") != "running":
+                return self._send({"status": "not_running", "message": "No analysis in progress"})
+            REVIEW_CANCEL_EVENT.set()
+            if CURRENT_REVIEW_ENGINE and CURRENT_REVIEW_ENGINE[0]:
+                try:
+                    CURRENT_REVIEW_ENGINE[0].quit()
+                except Exception:
+                    pass
+            REVIEW_STATUS["status"] = "cancelled"
+            REVIEW_STATUS["message"] = "Analysis cancelled by user."
+        return self._send({"status": "cancelled"})
+
     def _start_review(self, body):
         with REVIEW_LOCK:
             if REVIEW_STATUS.get("status") == "running":
                 return self._send({"error": "Analysis is already in progress"}, 409)
+            REVIEW_CANCEL_EVENT.clear()
             REVIEW_STATUS.update({
                 "status": "running",
                 "current": 0,
@@ -362,17 +381,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         every later review returning 409 until the process was restarted."""
         try:
             self._do_review(body)
-        except Exception as e:
+        except (InterruptedError, Exception) as e:
             with REVIEW_LOCK:
-                REVIEW_STATUS["status"] = "error"
-                REVIEW_STATUS["error"] = str(e)
-                REVIEW_STATUS["message"] = f"Error: {str(e)}"
+                if REVIEW_CANCEL_EVENT.is_set():
+                    REVIEW_STATUS["status"] = "cancelled"
+                    REVIEW_STATUS["message"] = "Analysis cancelled by user."
+                else:
+                    REVIEW_STATUS["status"] = "error"
+                    REVIEW_STATUS["error"] = str(e)
+                    REVIEW_STATUS["message"] = f"Error: {str(e)}"
         finally:
             with REVIEW_LOCK:
                 if REVIEW_STATUS.get("status") == "running":
-                    REVIEW_STATUS["status"] = "error"
-                    REVIEW_STATUS["error"] = REVIEW_STATUS.get("error") or "analysis stopped unexpectedly"
-                    REVIEW_STATUS["message"] = f"Error: {REVIEW_STATUS['error']}"
+                    if REVIEW_CANCEL_EVENT.is_set():
+                        REVIEW_STATUS["status"] = "cancelled"
+                        REVIEW_STATUS["message"] = "Analysis cancelled by user."
+                    else:
+                        REVIEW_STATUS["status"] = "error"
+                        REVIEW_STATUS["error"] = REVIEW_STATUS.get("error") or "analysis stopped unexpectedly"
+                        REVIEW_STATUS["message"] = f"Error: {REVIEW_STATUS['error']}"
 
     def _do_review(self, body):
         import chess.pgn
@@ -418,11 +445,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         with REVIEW_LOCK:
             REVIEW_STATUS["message"] = "Initializing Stockfish engine..."
 
+        if REVIEW_CANCEL_EVENT.is_set():
+            return
         engine_path = ENGINE_PATH or find_engine(None)
         res_data = review.review_game(
             game, engine_path, threads=2, movetime=movetime,
-            progress_cb=on_progress, username=username
+            progress_cb=on_progress, username=username,
+            cancel_event=REVIEW_CANCEL_EVENT, engine_ref=CURRENT_REVIEW_ENGINE
         )
+
+        if REVIEW_CANCEL_EVENT.is_set():
+            return
 
         out_file = os.path.join(UI, "out.json")
         tmp_file = out_file + ".tmp"
@@ -431,11 +464,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         os.replace(tmp_file, out_file)
 
         with REVIEW_LOCK:
-            REVIEW_STATUS["status"] = "done"
-            REVIEW_STATUS["current"] = REVIEW_STATUS["total"]
-            REVIEW_STATUS["percent"] = 100
-            REVIEW_STATUS["message"] = "Analysis complete!"
-            REVIEW_STATUS["data"] = res_data
+            if not REVIEW_CANCEL_EVENT.is_set():
+                REVIEW_STATUS["status"] = "done"
+                REVIEW_STATUS["current"] = REVIEW_STATUS["total"]
+                REVIEW_STATUS["percent"] = 100
+                REVIEW_STATUS["message"] = "Analysis complete!"
+                REVIEW_STATUS["data"] = res_data
 
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True; daemon_threads = True
