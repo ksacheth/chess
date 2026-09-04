@@ -270,9 +270,9 @@ def find_engine(explicit):
 def run_review(engine, target, game_id, movetime, out):
     cmd = [sys.executable, os.path.join(HERE, "review.py"), "--engine", engine,
            "--time", str(movetime), "--json", out]
-    m = re.search(r"chess\.com/.*?/(\d{6,})", target)
+    m = re.search(r"chess\.com/.*?/(\\d{6,})", target)
     if m:
-        u = re.search(r"username=([\w-]+)", target)
+        u = re.search(r"username=([\\w-]+)", target)
         if not u: sys.exit("URL has no ?username= — use: python3 gr.py USERNAME GAMEID")
         cmd += ["--chesscom", u.group(1), "--game-id", m.group(1)]
     elif os.path.exists(target): cmd.append(target)
@@ -300,6 +300,9 @@ def main():
     atexit.register(lambda: POOL.close() if POOL else None)
     out = os.path.join(UI, "out.json")
     if a.target and not a.skip_analysis: run_review(ENGINE_PATH, a.target, a.game_id, a.time, out)
+
+    if a.host not in ("127.0.0.1", "localhost"):
+        print(f"WARNING: Binding to non-loopback interface '{a.host}'. Review APIs are unauthenticated; place behind a trusted reverse proxy.")
 
     with Server((a.host, a.port), Handler) as httpd:
         host_display = "localhost" if a.host in ("127.0.0.1", "0.0.0.0") else a.host
